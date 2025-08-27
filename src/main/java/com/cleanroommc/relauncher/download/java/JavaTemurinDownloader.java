@@ -44,6 +44,12 @@ public final class JavaTemurinDownloader {
         return "x64";
     }
 
+    private static String detectMacArch() {
+        String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
+        if (arch.contains("aarch64") || arch.contains("arm64")) return "aarch64"; // Apple Silicon
+        return "x64"; // Intel Macs
+    }
+
     public static String ensureWindowsJava(Path baseDir, int majorVersion) throws IOException {
         return ensureWindowsJava(baseDir, majorVersion, null);
     }
@@ -123,6 +129,52 @@ public final class JavaTemurinDownloader {
         }
         if (downloadUrl == null) {
             throw new IOException("Unable to resolve Temurin Java " + majorVersion + " download URL for Linux " + arch + " from Adoptium API");
+        }
+
+        downloadFollowingRedirectsWithUA(downloadUrl, tarGzFile, progressListener);
+
+        extractTarGz(tarGzFile, targetDir);
+
+        try { Files.deleteIfExists(tarGzFile); } catch (IOException ignore) { }
+
+        javaBin = findJavaBinary(targetDir);
+        if (javaBin == null || !Files.isRegularFile(javaBin)) {
+            throw new IOException("Downloaded Java " + majorVersion + " archive did not contain a valid java binary");
+        }
+        return javaBin.toAbsolutePath().toString();
+    }
+
+    public static String ensureMacJava(Path baseDir, int majorVersion) throws IOException {
+        return ensureMacJava(baseDir, majorVersion, null);
+    }
+
+    public static String ensureMacJava(Path baseDir, int majorVersion, ProgressListener progressListener) throws IOException {
+        if (majorVersion <= 0) majorVersion = 21;
+        String arch = detectMacArch();
+        Path targetDir = baseDir.resolve(String.format("temurin-%d-mac-%s", majorVersion, arch));
+        Path javaBin = findJavaBinary(targetDir);
+        if (javaBin != null && Files.isRegularFile(javaBin)) {
+            return javaBin.toAbsolutePath().toString();
+        }
+
+        Files.createDirectories(targetDir);
+        Path tarGzFile = baseDir.resolve(String.format("temurin-%d-mac-%s.tar.gz", majorVersion, arch));
+
+        String downloadUrl = null;
+        try {
+            downloadUrl = fetchAdoptiumDownloadLink(majorVersion, "mac", arch, "jre");
+        } catch (IOException e) {
+            CleanroomRelauncher.LOGGER.warn("Failed to resolve Temurin {} JRE via assets API (mac): {}", majorVersion, e.toString());
+        }
+        if (downloadUrl == null) {
+            try {
+                downloadUrl = fetchAdoptiumDownloadLink(majorVersion, "mac", arch, "jdk");
+            } catch (IOException e) {
+                CleanroomRelauncher.LOGGER.warn("Failed to resolve Temurin {} JDK via assets API (mac): {}", majorVersion, e.toString());
+            }
+        }
+        if (downloadUrl == null) {
+            throw new IOException("Unable to resolve Temurin Java " + majorVersion + " download URL for macOS " + arch + " from Adoptium API");
         }
 
         downloadFollowingRedirectsWithUA(downloadUrl, tarGzFile, progressListener);
