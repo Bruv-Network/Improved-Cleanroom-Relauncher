@@ -7,6 +7,9 @@ import com.cleanroommc.relauncher.download.CleanroomRelease;
 import com.cleanroommc.relauncher.download.cache.CleanroomCache;
 import com.cleanroommc.relauncher.download.schema.Version;
 import com.cleanroommc.relauncher.gui.RelauncherGUI;
+import com.cleanroommc.relauncher.download.java.JavaTemurinDownloader;
+import com.cleanroommc.relauncher.download.GlobalDownloader;
+import com.cleanroommc.relauncher.gui.SetupProgressDialog;
 import com.google.gson.Gson;
 import net.minecraft.launchwrapper.Launch;
 import net.minecraftforge.fml.cleanroomrelauncher.ExitVMBypass;
@@ -15,6 +18,9 @@ import org.apache.commons.io.FileUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.util.ProcessIdUtil;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import java.io.*;
 import java.lang.management.ManagementFactory;
@@ -33,6 +39,20 @@ public class CleanroomRelauncher {
     public static RelauncherConfiguration CONFIG = RelauncherConfiguration.read();
 
     public CleanroomRelauncher() { }
+
+    private static Integer extractTemurinMajorFromPath(String javaPath) {
+        if (javaPath == null || javaPath.isEmpty()) return null;
+        String normalized = javaPath.replace('\\', '/');
+        try {
+            Pattern pat = Pattern.compile("temurin-(\\d+)-windows-x64", Pattern.CASE_INSENSITIVE);
+            Matcher m = pat.matcher(normalized);
+            if (m.find()) {
+                return Integer.parseInt(m.group(1));
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
 
     private static boolean isCleanroom() {
         try {
@@ -141,7 +161,7 @@ public class CleanroomRelauncher {
         CleanroomRelease latestRelease = releases.get(0);
 
         LOGGER.info("{} cleanroom releases were queried.", releases.size());
-
+  
         CleanroomRelease selected = null;
         String selectedVersion = CONFIG.getCleanroomVersion();
         String notedLatestVersion = CONFIG.getLatestCleanroomVersion();
@@ -157,7 +177,92 @@ public class CleanroomRelauncher {
 //        if (javaArgs == null) {
 //            javaArgs = String.join(" ", ManagementFactory.getRuntimeMXBean().getInputArguments());
 //        }
-        if (selected == null || javaPath == null || needsNotifyLatest) {
+        // Perform initial setup if either selection or Java path is missing.
+        boolean didAutoSetup = false;
+        AtomicReference<SetupProgressDialog> setupDialogRef = new AtomicReference<>(null);
+        // Determine desired Java version from config and auto-switch if current path differs
+        int desiredJava = CONFIG.getJavaVersion();
+        Integer currentJavaFromPath = extractTemurinMajorFromPath(javaPath);
+        if (javaPath != null && (currentJavaFromPath == null || currentJavaFromPath.intValue() != desiredJava)) {
+            LOGGER.info("Configured Java version {} differs from current Java path ({}). Switching to Temurin {}...", desiredJava, javaPath, desiredJava);
+            javaPath = null; // trigger auto-setup to fetch the desired Java version
+        }
+        boolean initialSetupNeeded = (selected == null) || (javaPath == null);
+        if (initialSetupNeeded) {
+            didAutoSetup = true;
+            if (selected == null) {
+                LOGGER.info("No Cleanroom version selected. Auto-selecting latest release {}.", latestRelease.name);
+                selected = latestRelease;
+            }
+            if (javaPath == null) {
+                LOGGER.info("No Java path configured. Preparing Java {} for Windows (auto-download)...", desiredJava);
+                {
+                    SetupProgressDialog dlg = SetupProgressDialog.show("Setting Up Necessary Libraries (Only Happens Once)");
+                    setupDialogRef.set(dlg);
+                    dlg.setMessage("Downloading Java " + desiredJava + " (Temurin)...");
+                    dlg.setIndeterminate(true);
+                }
+                try {
+                    String os = System.getProperty("os.name").toLowerCase(Locale.ROOT);
+                    if (os.contains("win")) {
+                        javaPath = JavaTemurinDownloader.ensureWindowsJava(
+                                CleanroomRelauncher.CACHE_DIR.resolve("java"),
+                                desiredJava,
+                                new JavaTemurinDownloader.ProgressListener() {
+                                    private long total = -1;
+                                    @Override
+                                    public void onStart(long totalBytes) {
+                                        this.total = totalBytes;
+                                        SetupProgressDialog dlg = setupDialogRef.get();
+                                        if (dlg != null) {
+                                            if (totalBytes > 0) {
+                                                dlg.setIndeterminate(false);
+                                                dlg.setProgressPercent(0);
+                                            } else {
+                                                dlg.setIndeterminate(true);
+                                            }
+                                        }
+                                    }
+                                    @Override
+                                    public void onProgress(long downloadedBytes, long totalBytes) {
+                                        if (total > 0) {
+                                            int pct = (int) ((downloadedBytes * 100L) / total);
+                                            SetupProgressDialog dlg = setupDialogRef.get();
+                                            if (dlg != null) dlg.setProgressPercent(pct);
+                                        }
+                                    }
+                                }
+                        );
+                    } else {
+                        LOGGER.warn("Auto Temurin Java download is currently implemented for Windows only. Falling back to manual selection for OS: {}", os);
+                    }
+                } catch (IOException e) {
+                    LOGGER.error("Failed to auto-download Java {}: {}", desiredJava, e.toString());
+                }
+            }
+
+            // Persist whatever we were able to auto-resolve
+            if (selected != null) CONFIG.setCleanroomVersion(selected.name);
+            CONFIG.setLatestCleanroomVersion(latestRelease.name);
+            if (javaPath != null) CONFIG.setJavaExecutablePath(javaPath);
+            CONFIG.setJavaArguments(javaArgs);
+            // persist desired java version so users can change it in config pre-first-run
+            CONFIG.setJavaVersion(CONFIG.getJavaVersion());
+            CONFIG.save();
+            // If Java download failed, ensure any progress dialog is closed before falling back to GUI
+            if (javaPath == null) {
+                SetupProgressDialog dlg = setupDialogRef.getAndSet(null);
+                if (dlg != null) dlg.close();
+            }
+        }
+
+        // Show GUI only if still missing required selections, or if no auto-setup occurred and a newer latest is available
+        boolean shouldShowGui = (selected == null || javaPath == null) || (!didAutoSetup && needsNotifyLatest);
+        if (shouldShowGui) {
+            {
+                SetupProgressDialog dlg = setupDialogRef.getAndSet(null); // safety: ensure dialog is not left open when showing GUI
+                if (dlg != null) dlg.close();
+            }
             final CleanroomRelease fSelected = selected;
             final String fJavaPath = javaPath;
             final String fJavaArgs = javaArgs;
@@ -182,7 +287,40 @@ public class CleanroomRelauncher {
         CleanroomCache releaseCache = CleanroomCache.of(selected);
 
         LOGGER.info("Preparing Cleanroom v{} and its libraries...", selected.name);
+        if (didAutoSetup) {
+            if (setupDialogRef.get() == null) {
+                setupDialogRef.set(SetupProgressDialog.show("Setting Up Necessary Libraries (Only Happens Once)"));
+            }
+            {
+                SetupProgressDialog dlg = setupDialogRef.get();
+                if (dlg != null) {
+                    dlg.setMessage("Downloading Cleanroom libraries...");
+                    dlg.setIndeterminate(false);
+                    dlg.setProgressPercent(0);
+                }
+            }
+            GlobalDownloader.INSTANCE.setProgressListener(new GlobalDownloader.TaskProgressListener() {
+                private int total = 0;
+                @Override
+                public void onTotal(int total) {
+                    this.total = Math.max(1, total);
+                    SetupProgressDialog dlg = setupDialogRef.get();
+                    if (dlg != null) dlg.setProgressPercent(0);
+                }
+                @Override
+                public void onCompleted(int completed, int total) {
+                    int pct = (int) ((completed * 100.0f) / Math.max(1, total));
+                    SetupProgressDialog dlg = setupDialogRef.get();
+                    if (dlg != null) dlg.setProgressPercent(pct);
+                }
+            });
+        }
         List<Version> versions = versions(releaseCache);
+        if (didAutoSetup) {
+            SetupProgressDialog dlg = setupDialogRef.getAndSet(null);
+            if (dlg != null) dlg.close();
+            GlobalDownloader.INSTANCE.setProgressListener(null);
+        }
 
         String wrapperClassPath = getOrExtract();
 

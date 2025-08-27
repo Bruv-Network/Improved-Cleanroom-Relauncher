@@ -20,6 +20,14 @@ public final class GlobalDownloader {
     public static final GlobalDownloader INSTANCE = new GlobalDownloader();
 
     private final List<ForkJoinTask> downloads = new ArrayList<>();
+    public interface TaskProgressListener {
+        void onTotal(int total);
+        void onCompleted(int completed, int total);
+    }
+    private volatile TaskProgressListener progressListener;
+    public void setProgressListener(TaskProgressListener listener) {
+        this.progressListener = listener;
+    }
 
     public void from(String source, File destination) {
         URI uri;
@@ -53,11 +61,14 @@ public final class GlobalDownloader {
         int total = this.downloads.size();
         int completed = 0;
         int last = 0;
+        TaskProgressListener listener = this.progressListener;
+        if (listener != null) listener.onTotal(total);
         for (Future download : this.downloads) {
             try {
                 download.get();
                 completed++;
                 int percentage = (completed * 100) / total;
+                if (listener != null) listener.onCompleted(completed, total);
                 if (percentage % 10 == 0 && last != percentage) {
                     last = percentage;
                     CleanroomRelauncher.LOGGER.info("Download Progress: {} / {} | {}% completed.", completed, total, percentage);

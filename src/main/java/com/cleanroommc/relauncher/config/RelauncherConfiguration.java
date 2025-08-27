@@ -34,6 +34,8 @@ public class RelauncherConfiguration {
     private String javaExecutablePath;
     @SerializedName("args")
     private String javaArguments = "";
+    @SerializedName("javaVersion")
+    private int javaVersion = 21;
 
     public String getCleanroomVersion() {
         return cleanroomVersion;
@@ -51,6 +53,10 @@ public class RelauncherConfiguration {
         return javaArguments;
     }
 
+    public int getJavaVersion() {
+        return javaVersion <= 0 ? 21 : javaVersion;
+    }
+
     public void setCleanroomVersion(String cleanroomVersion) {
         this.cleanroomVersion = cleanroomVersion;
     }
@@ -65,6 +71,10 @@ public class RelauncherConfiguration {
 
     public void setJavaArguments(String javaArguments) {
         this.javaArguments = javaArguments;
+    }
+
+    public void setJavaVersion(int javaVersion) {
+        this.javaVersion = javaVersion;
     }
 
     public void save() {
