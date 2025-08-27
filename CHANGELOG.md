@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0] - 2025-08-28
+
+### Added
+- Java 21 auto-download.
+- Architecture detection.
+- Full Windows and Linux support for Java auto-download.
+- MacOS is untested, if it doesn't work please report it on github with the log file.
+
 ## [0.3.0] - 2025-07-08
 
 ### Added
