@@ -44,7 +44,7 @@ public class CleanroomRelauncher {
         if (javaPath == null || javaPath.isEmpty()) return null;
         String normalized = javaPath.replace('\\', '/');
         try {
-            Pattern pat = Pattern.compile("temurin-(\\d+)-windows-x64", Pattern.CASE_INSENSITIVE);
+            Pattern pat = Pattern.compile("temurin-(\\d+)-(windows|linux)-(x64|aarch64)", Pattern.CASE_INSENSITIVE);
             Matcher m = pat.matcher(normalized);
             if (m.find()) {
                 return Integer.parseInt(m.group(1));
@@ -195,7 +195,7 @@ public class CleanroomRelauncher {
                 selected = latestRelease;
             }
             if (javaPath == null) {
-                LOGGER.info("No Java path configured. Preparing Java {} for Windows (auto-download)...", desiredJava);
+                LOGGER.info("No Java path configured. Preparing Java {} for this OS (auto-download)...", desiredJava);
                 {
                     SetupProgressDialog dlg = SetupProgressDialog.show("Setting Up Necessary Libraries (Only Happens Once)");
                     setupDialogRef.set(dlg);
@@ -233,8 +233,37 @@ public class CleanroomRelauncher {
                                     }
                                 }
                         );
+                    } else if (os.contains("nux") || os.contains("nix") || os.contains("aix") || os.contains("linux")) {
+                        javaPath = JavaTemurinDownloader.ensureLinuxJava(
+                                CleanroomRelauncher.CACHE_DIR.resolve("java"),
+                                desiredJava,
+                                new JavaTemurinDownloader.ProgressListener() {
+                                    private long total = -1;
+                                    @Override
+                                    public void onStart(long totalBytes) {
+                                        this.total = totalBytes;
+                                        SetupProgressDialog dlg = setupDialogRef.get();
+                                        if (dlg != null) {
+                                            if (totalBytes > 0) {
+                                                dlg.setIndeterminate(false);
+                                                dlg.setProgressPercent(0);
+                                            } else {
+                                                dlg.setIndeterminate(true);
+                                            }
+                                        }
+                                    }
+                                    @Override
+                                    public void onProgress(long downloadedBytes, long totalBytes) {
+                                        if (total > 0) {
+                                            int pct = (int) ((downloadedBytes * 100L) / total);
+                                            SetupProgressDialog dlg = setupDialogRef.get();
+                                            if (dlg != null) dlg.setProgressPercent(pct);
+                                        }
+                                    }
+                                }
+                        );
                     } else {
-                        LOGGER.warn("Auto Temurin Java download is currently implemented for Windows only. Falling back to manual selection for OS: {}", os);
+                        LOGGER.warn("Auto Temurin Java download is not implemented for this OS: {}. Falling back to manual selection.", os);
                     }
                 } catch (IOException e) {
                     LOGGER.error("Failed to auto-download Java {}: {}", desiredJava, e.toString());
