@@ -31,7 +31,7 @@ Configuration
   - javaExecutablePath: set if you want to force a specific Java. If it’s not valid or mismatched with javaVersion, the relauncher will auto-download the correct one.
 
 Cache locations
-- Java is cached under: <UserHome>/.cleanroom/relauncher/java/temurin-<version>-<os>-<arch>
+- Java is cached under: &lt;UserHome&gt;/.cleanroom/relauncher/java/temurin-&lt;version&gt;-&lt;os&gt;-&lt;arch&gt;
   - Example: ~/.cleanroom/relauncher/java/temurin-21-windows-x64
   - Example: ~/.cleanroom/relauncher/java/temurin-21-linux-x64
   - Example: ~/.cleanroom/relauncher/java/temurin-21-mac-aarch64
