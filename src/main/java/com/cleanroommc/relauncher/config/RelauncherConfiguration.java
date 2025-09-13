@@ -41,6 +41,8 @@ public class RelauncherConfiguration {
     private int javaVersion = 21;
     @SerializedName("javaVendor")
     private String javaVendor = "adoptium";
+    @SerializedName("darkMode")
+    private boolean darkMode = true;
 
     public String getCleanroomVersion() {
         return cleanroomVersion;
@@ -64,6 +66,10 @@ public class RelauncherConfiguration {
 
     public String getJavaVendor() {
         return (javaVendor == null || javaVendor.isEmpty()) ? "adoptium" : javaVendor.toLowerCase();
+    }
+
+    public boolean isDarkMode() {
+        return darkMode;
     }
 
     public void setCleanroomVersion(String cleanroomVersion) {
@@ -90,20 +96,77 @@ public class RelauncherConfiguration {
         this.javaVendor = (javaVendor == null || javaVendor.isEmpty()) ? "adoptium" : javaVendor.toLowerCase();
     }
 
+    public void setDarkMode(boolean darkMode) {
+        this.darkMode = darkMode;
+    }
+
     public void save() {
         FILE.getParentFile().mkdirs();
         try (Writer writer = new OutputStreamWriter(new FileOutputStream(FILE), StandardCharsets.UTF_8)) {
             String nl = System.lineSeparator();
+            // Header
             writer.write("// Cleanroom Relauncher configuration" + nl);
-            writer.write("// Available vendors: \"adoptium\" (Temurin), \"graalvm\" (GraalVM Community JDK)" + nl);
-            writer.write("// javaVendor: preferred vendor; falls back to adoptium if unavailable for your OS/arch/version" + nl);
-            writer.write("// javaVersion: major Java version to use (e.g., 21). Changing this triggers auto re-download and switch" + nl);
-            writer.write("// javaPath: optional absolute path to Java executable; leave empty to auto-manage" + nl);
-            writer.write("// args: optional JVM arguments appended when launching Cleanroom" + nl);
-            GSON.toJson(this, writer);
+            writer.write("// This file is parsed leniently; comments are allowed and preserved on save." + nl + nl);
+
+            // Begin JSON object
+            writer.write("{" + nl);
+
+            // selectedVersion
+            writer.write("  // Cleanroom version to launch (auto-selected on first run)" + nl);
+            writer.write("  \"selectedVersion\": " + (cleanroomVersion == null ? "null" : ("\"" + escapeJson(cleanroomVersion) + "\"")) + "," + nl);
+
+            // latestVersion
+            writer.write("  // Latest Cleanroom version seen by the relauncher (informational)" + nl);
+            writer.write("  \"latestVersion\": " + (latestCleanroomVersion == null ? "null" : ("\"" + escapeJson(latestCleanroomVersion) + "\"")) + "," + nl);
+
+            // javaVendor
+            writer.write("  // Preferred Java vendor: \"adoptium\" (Temurin) or \"graalvm\" (GraalVM Community JDK)." + nl);
+            writer.write("  // If chosen vendor is unavailable for your OS/arch/version, the relauncher falls back to Adoptium automatically." + nl);
+            writer.write("  \"javaVendor\": \"" + escapeJson(getJavaVendor()) + "\"," + nl);
+
+            // javaVersion
+            writer.write("  // Java major version to use (e.g., 21). Changing this triggers auto re-download and switch." + nl);
+            writer.write("  \"javaVersion\": " + getJavaVersion() + "," + nl);
+
+            // darkMode
+            writer.write("  // UI theme: dark mode on/off (default: true). When enabled, all relauncher UI uses a dark theme." + nl);
+            writer.write("  \"darkMode\": " + (isDarkMode() ? "true" : "false") + "," + nl);
+
+            // javaPath
+            writer.write("  // Optional absolute path to a Java executable. Leave null/empty to let the relauncher manage Java automatically." + nl);
+            String jp = getJavaExecutablePath();
+            writer.write("  \"javaPath\": " + ((jp == null || jp.isEmpty()) ? "null" : ("\"" + escapeJson(jp) + "\"")) + "," + nl);
+
+            // args
+            writer.write("  // Optional JVM arguments appended when launching Cleanroom." + nl);
+            String ja = getJavaArguments();
+            writer.write("  \"args\": " + (ja == null ? "\"\"" : ("\"" + escapeJson(ja) + "\"")) + nl);
+
+            writer.write("}" + nl);
         } catch (IOException e) {
             CleanroomRelauncher.LOGGER.error("Unable to save config", e);
         }
+    }
+
+    private static String escapeJson(String s) {
+        StringBuilder sb = new StringBuilder(s.length() + 16);
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"': sb.append("\\\""); break;
+                case '\\': sb.append("\\\\"); break;
+                case '\n': sb.append("\\n"); break;
+                case '\r': sb.append("\\r"); break;
+                case '\t': sb.append("\\t"); break;
+                default:
+                    if (c < 0x20) {
+                        sb.append(String.format("\\u%04x", (int)c));
+                    } else {
+                        sb.append(c);
+                    }
+            }
+        }
+        return sb.toString();
     }
 
 }

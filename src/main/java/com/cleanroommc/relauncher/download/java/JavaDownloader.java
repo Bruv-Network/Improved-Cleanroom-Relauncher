@@ -28,6 +28,7 @@ public final class JavaDownloader {
     public interface ProgressListener {
         void onStart(long totalBytes);
         void onProgress(long downloadedBytes, long totalBytes);
+        default void onRetryScheduled(int attempt, int maxAttempts, long delayMs) {}
     }
 
     private static void normalizeExtractedRoot(Path targetDir, int majorVersion, String imageType) throws IOException {
@@ -138,7 +139,7 @@ public final class JavaDownloader {
         Files.createDirectories(targetDir);
         Path zipFile = baseDir.resolve(String.format("%s-%d-windows-%s.zip", vendorSlug, majorVersion, arch));
 
-        downloadFollowingRedirectsWithUA(downloadUrl, zipFile, progressListener);
+        downloadWithRetries(downloadUrl, zipFile, progressListener, 3);
 
         extractZip(zipFile, targetDir);
         normalizeExtractedRoot(targetDir, majorVersion, imageTypeUsed);
@@ -214,7 +215,7 @@ public final class JavaDownloader {
         Files.createDirectories(targetDir);
         Path tarGzFile = baseDir.resolve(String.format("%s-%d-linux-%s.tar.gz", vendorSlug, majorVersion, arch));
 
-        downloadFollowingRedirectsWithUA(downloadUrl, tarGzFile, progressListener);
+        downloadWithRetries(downloadUrl, tarGzFile, progressListener, 3);
 
         extractTarGz(tarGzFile, targetDir);
         normalizeExtractedRoot(targetDir, majorVersion, imageTypeUsed);
@@ -496,9 +497,47 @@ public final class JavaDownloader {
         }
     }
 
+    private static void downloadWithRetries(String urlStr, Path dest, ProgressListener listener, int maxRetries) throws IOException {
+        int attempt = 0;
+        long baseDelayMs = 2_000L;
+        IOException last = null;
+        while (attempt <= maxRetries) {
+            try {
+                downloadFollowingRedirectsWithUA(urlStr, dest, listener);
+                return;
+            } catch (IOException e) {
+                last = e;
+                if (attempt == maxRetries) break;
+                long backoff = baseDelayMs * (1L << attempt);
+                long jitter = (long) (backoff * 0.2 * Math.random());
+                long sleep = backoff + jitter;
+                CleanroomRelauncher.LOGGER.warn("Download failed (attempt {}/{}). Retrying in {} ms: {}", attempt + 1, maxRetries + 1, sleep, e.toString());
+                long remaining = sleep;
+                long tick;
+                while (remaining > 0) {
+                    if (listener != null) {
+                        try { listener.onRetryScheduled(attempt + 1, maxRetries + 1, remaining); } catch (Throwable ignored) {}
+                    }
+                    tick = Math.min(1000L, remaining);
+                    try { Thread.sleep(tick); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                    remaining -= tick;
+                }
+                attempt++;
+            }
+        }
+        throw last != null ? last : new IOException("Download failed after retries: " + urlStr);
+    }
+
     private static void downloadFollowingRedirectsWithUA(String urlStr, Path dest, ProgressListener listener) throws IOException {
         String current = urlStr;
+        Path temp = dest.resolveSibling(dest.getFileName().toString() + ".part");
+        if (!Files.exists(temp)) {
+            Files.createDirectories(temp.getParent());
+            Files.createFile(temp);
+        }
         for (int i = 0; i < 7; i++) { // follow up to 7 redirects
+            long existing = 0L;
+            try { existing = Files.size(temp); } catch (IOException ignore) { existing = 0L; }
             URL url = new URL(current);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setInstanceFollowRedirects(false);
@@ -507,6 +546,9 @@ public final class JavaDownloader {
             conn.setReadTimeout(120_000);
             conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) CleanroomRelauncher/1.0");
             conn.setRequestProperty("Accept", "application/octet-stream");
+            if (existing > 0) {
+                conn.setRequestProperty("Range", "bytes=" + existing + "-");
+            }
             int code = conn.getResponseCode();
             if (code >= 300 && code < 400) {
                 String location = conn.getHeaderField("Location");
@@ -514,22 +556,45 @@ public final class JavaDownloader {
                 current = location;
                 continue;
             }
-            if (code == 200) {
-                long total = -1;
-                try {
-                    total = Long.parseLong(conn.getHeaderField("Content-Length"));
-                } catch (Exception ignore) { total = -1; }
+            if (code == 206 || code == 200) {
+                long total = -1L;
+                if (code == 206) {
+                    String cr = conn.getHeaderField("Content-Range");
+                    // format: bytes <start>-<end>/<total>
+                    if (cr != null && cr.startsWith("bytes ")) {
+                        int slash = cr.indexOf('/');
+                        if (slash > 0 && slash + 1 < cr.length()) {
+                            try { total = Long.parseLong(cr.substring(slash + 1).trim()); } catch (Exception ignore) { total = -1L; }
+                        }
+                    }
+                    if (total <= 0) {
+                        // fallback to remaining length + existing
+                        long remaining = -1L;
+                        try { remaining = Long.parseLong(conn.getHeaderField("Content-Length")); } catch (Exception ignore) { remaining = -1L; }
+                        if (remaining > 0) total = remaining + existing; else total = -1L;
+                    }
+                } else { // 200
+                    try { total = Long.parseLong(conn.getHeaderField("Content-Length")); } catch (Exception ignore) { total = -1L; }
+                    // server ignored range; reset existing
+                    existing = 0L;
+                }
                 if (listener != null) listener.onStart(total);
                 try (InputStream in = new BufferedInputStream(conn.getInputStream());
-                     OutputStream out = Files.newOutputStream(dest, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
+                     OutputStream out = Files.newOutputStream(temp, StandardOpenOption.CREATE, existing > 0 ? StandardOpenOption.APPEND : StandardOpenOption.TRUNCATE_EXISTING)) {
                     byte[] buf = new byte[8192];
-                    long downloaded = 0;
+                    long downloaded = existing;
                     int n;
                     while ((n = in.read(buf)) >= 0) {
                         out.write(buf, 0, n);
                         downloaded += n;
                         if (listener != null) listener.onProgress(downloaded, total);
                     }
+                }
+                // Move into place
+                try {
+                    Files.move(temp, dest, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+                } catch (AtomicMoveNotSupportedException e) {
+                    Files.move(temp, dest, StandardCopyOption.REPLACE_EXISTING);
                 }
                 CleanroomRelauncher.LOGGER.info("Downloaded Java from {}", current);
                 return;

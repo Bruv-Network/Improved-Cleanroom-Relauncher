@@ -67,6 +67,24 @@ public class CleanroomRelauncher {
         return null;
     }
 
+    private static String formatSpeed(double bytesPerSec) {
+        if (bytesPerSec <= 0) return "0 B/s";
+        final String[] units = {"B/s", "KB/s", "MB/s", "GB/s"};
+        int idx = 0;
+        double v = bytesPerSec;
+        while (v >= 1024.0 && idx < units.length - 1) { v /= 1024.0; idx++; }
+        return String.format(Locale.ROOT, "%.1f %s", v, units[idx]);
+    }
+
+    private static String formatETA(long seconds) {
+        if (seconds < 0) return "--:--";
+        long h = seconds / 3600;
+        long m = (seconds % 3600) / 60;
+        long s = seconds % 60;
+        if (h > 0) return String.format(Locale.ROOT, "%d:%02d:%02d", h, m, s);
+        return String.format(Locale.ROOT, "%02d:%02d", m, s);
+    }
+
     private static boolean isCleanroom() {
         try {
             Class.forName("com.cleanroommc.boot.Main");
@@ -231,14 +249,17 @@ public class CleanroomRelauncher {
                                 desiredVendor,
                                 new JavaDownloader.ProgressListener() {
                                     private long total = -1;
+                                    private long startNs = -1;
+                                    private int lastPct = 0;
                                     @Override
                                     public void onStart(long totalBytes) {
                                         this.total = totalBytes;
+                                        this.startNs = System.nanoTime();
                                         SetupProgressDialog dlg = setupDialogRef.get();
                                         if (dlg != null) {
                                             if (totalBytes > 0) {
                                                 dlg.setIndeterminate(false);
-                                                dlg.setProgressPercent(0);
+                                                dlg.setProgress(0, "0%  0 B/s  ETA --:--");
                                             } else {
                                                 dlg.setIndeterminate(true);
                                             }
@@ -248,8 +269,26 @@ public class CleanroomRelauncher {
                                     public void onProgress(long downloadedBytes, long totalBytes) {
                                         if (total > 0) {
                                             int pct = (int) ((downloadedBytes * 100L) / total);
+                                            lastPct = pct;
                                             SetupProgressDialog dlg = setupDialogRef.get();
-                                            if (dlg != null) dlg.setProgressPercent(pct);
+                                            if (dlg != null) {
+                                                long elapsedNs = System.nanoTime() - startNs;
+                                                double elapsedSec = elapsedNs > 0 ? (elapsedNs / 1_000_000_000.0) : 0.0;
+                                                double bps = elapsedSec > 0 ? (downloadedBytes / elapsedSec) : 0.0;
+                                                long remaining = Math.max(0L, total - downloadedBytes);
+                                                long etaSec = bps > 0 ? (long) Math.ceil(remaining / bps) : -1;
+                                                String text = String.format(Locale.ROOT, "%d%%  %s  ETA %s", pct, formatSpeed(bps), formatETA(etaSec));
+                                                dlg.setProgress(pct, text);
+                                            }
+                                        }
+                                    }
+                                    @Override
+                                    public void onRetryScheduled(int attempt, int maxAttempts, long delayMs) {
+                                        SetupProgressDialog dlg = setupDialogRef.get();
+                                        if (dlg != null) {
+                                            int secs = (int) Math.ceil(delayMs / 1000.0);
+                                            String text = String.format(Locale.ROOT, "%d%%  Retry %d/%d in %ds", lastPct, attempt, maxAttempts, secs);
+                                            dlg.setProgress(lastPct, text);
                                         }
                                     }
                                 }
@@ -261,14 +300,17 @@ public class CleanroomRelauncher {
                                 desiredVendor,
                                 new JavaDownloader.ProgressListener() {
                                     private long total = -1;
+                                    private long startNs = -1;
+                                    private int lastPct = 0;
                                     @Override
                                     public void onStart(long totalBytes) {
                                         this.total = totalBytes;
+                                        this.startNs = System.nanoTime();
                                         SetupProgressDialog dlg = setupDialogRef.get();
                                         if (dlg != null) {
                                             if (totalBytes > 0) {
                                                 dlg.setIndeterminate(false);
-                                                dlg.setProgressPercent(0);
+                                                dlg.setProgress(0, "0%  0 B/s  ETA --:--");
                                             } else {
                                                 dlg.setIndeterminate(true);
                                             }
@@ -278,8 +320,26 @@ public class CleanroomRelauncher {
                                     public void onProgress(long downloadedBytes, long totalBytes) {
                                         if (total > 0) {
                                             int pct = (int) ((downloadedBytes * 100L) / total);
+                                            lastPct = pct;
                                             SetupProgressDialog dlg = setupDialogRef.get();
-                                            if (dlg != null) dlg.setProgressPercent(pct);
+                                            if (dlg != null) {
+                                                long elapsedNs = System.nanoTime() - startNs;
+                                                double elapsedSec = elapsedNs > 0 ? (elapsedNs / 1_000_000_000.0) : 0.0;
+                                                double bps = elapsedSec > 0 ? (downloadedBytes / elapsedSec) : 0.0;
+                                                long remaining = Math.max(0L, total - downloadedBytes);
+                                                long etaSec = bps > 0 ? (long) Math.ceil(remaining / bps) : -1;
+                                                String text = String.format(Locale.ROOT, "%d%%  %s  ETA %s", pct, formatSpeed(bps), formatETA(etaSec));
+                                                dlg.setProgress(pct, text);
+                                            }
+                                        }
+                                    }
+                                    @Override
+                                    public void onRetryScheduled(int attempt, int maxAttempts, long delayMs) {
+                                        SetupProgressDialog dlg = setupDialogRef.get();
+                                        if (dlg != null) {
+                                            int secs = (int) Math.ceil(delayMs / 1000.0);
+                                            String text = String.format(Locale.ROOT, "%d%%  Retry %d/%d in %ds", lastPct, attempt, maxAttempts, secs);
+                                            dlg.setProgress(lastPct, text);
                                         }
                                     }
                                 }
@@ -291,14 +351,17 @@ public class CleanroomRelauncher {
                                 desiredVendor,
                                 new JavaDownloader.ProgressListener() {
                                     private long total = -1;
+                                    private long startNs = -1;
+                                    private int lastPct = 0;
                                     @Override
                                     public void onStart(long totalBytes) {
                                         this.total = totalBytes;
+                                        this.startNs = System.nanoTime();
                                         SetupProgressDialog dlg = setupDialogRef.get();
                                         if (dlg != null) {
                                             if (totalBytes > 0) {
                                                 dlg.setIndeterminate(false);
-                                                dlg.setProgressPercent(0);
+                                                dlg.setProgress(0, "0%  0 B/s  ETA --:--");
                                             } else {
                                                 dlg.setIndeterminate(true);
                                             }
@@ -308,8 +371,26 @@ public class CleanroomRelauncher {
                                     public void onProgress(long downloadedBytes, long totalBytes) {
                                         if (total > 0) {
                                             int pct = (int) ((downloadedBytes * 100L) / total);
+                                            lastPct = pct;
                                             SetupProgressDialog dlg = setupDialogRef.get();
-                                            if (dlg != null) dlg.setProgressPercent(pct);
+                                            if (dlg != null) {
+                                                long elapsedNs = System.nanoTime() - startNs;
+                                                double elapsedSec = elapsedNs > 0 ? (elapsedNs / 1_000_000_000.0) : 0.0;
+                                                double bps = elapsedSec > 0 ? (downloadedBytes / elapsedSec) : 0.0;
+                                                long remaining = Math.max(0L, total - downloadedBytes);
+                                                long etaSec = bps > 0 ? (long) Math.ceil(remaining / bps) : -1;
+                                                String text = String.format(Locale.ROOT, "%d%%  %s  ETA %s", pct, formatSpeed(bps), formatETA(etaSec));
+                                                dlg.setProgress(pct, text);
+                                            }
+                                        }
+                                    }
+                                    @Override
+                                    public void onRetryScheduled(int attempt, int maxAttempts, long delayMs) {
+                                        SetupProgressDialog dlg = setupDialogRef.get();
+                                        if (dlg != null) {
+                                            int secs = (int) Math.ceil(delayMs / 1000.0);
+                                            String text = String.format(Locale.ROOT, "%d%%  Retry %d/%d in %ds", lastPct, attempt, maxAttempts, secs);
+                                            dlg.setProgress(lastPct, text);
                                         }
                                     }
                                 }

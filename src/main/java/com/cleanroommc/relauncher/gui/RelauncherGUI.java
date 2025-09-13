@@ -218,6 +218,14 @@ public class RelauncherGUI extends JDialog {
 
         this.add(wrapper, BorderLayout.NORTH);
         this.add(relaunchButtonPanel, BorderLayout.SOUTH);
+
+        if (CleanroomRelauncher.CONFIG != null && CleanroomRelauncher.CONFIG.isDarkMode()) {
+            applyDarkTheme(this.getContentPane());
+            applyDarkTheme(wrapper);
+            applyDarkTheme(contentPanel);
+            applyDarkTheme(mainPanel);
+            applyDarkTheme(relaunchButtonPanel);
+        }
         float scale = rect.width / 1463f;
         scaleComponent(this, scale);
 
@@ -225,6 +233,59 @@ public class RelauncherGUI extends JDialog {
         this.setSize(width, height);
         this.setVisible(true);
         this.setAutoRequestFocus(true);
+    }
+
+    private static void applyDarkTheme(Container root) {
+        Color bg = new Color(0x1e1e1e);
+        Color bg2 = new Color(0x2d2d2d);
+        Color fg = new Color(0xe0e0e0);
+        // Basic UI defaults to improve dialogs/controls
+        UIManager.put("Panel.background", bg);
+        UIManager.put("OptionPane.background", bg);
+        UIManager.put("OptionPane.messageForeground", fg);
+        UIManager.put("Button.background", bg2);
+        UIManager.put("Button.foreground", fg);
+        UIManager.put("Label.foreground", fg);
+        UIManager.put("TextField.background", bg2);
+        UIManager.put("TextField.foreground", fg);
+        UIManager.put("ComboBox.background", bg2);
+        UIManager.put("ComboBox.foreground", fg);
+        UIManager.put("List.background", bg2);
+        UIManager.put("List.foreground", fg);
+        if (root instanceof JComponent) {
+            tint((JComponent) root, bg, bg2, fg);
+        }
+    }
+
+    private static void tint(JComponent comp, Color bg, Color bg2, Color fg) {
+        if (comp instanceof JPanel) {
+            comp.setBackground(bg);
+        } else if (comp instanceof JLabel) {
+            comp.setBackground(bg);
+            ((JLabel) comp).setForeground(fg);
+        } else if (comp instanceof JButton) {
+            comp.setBackground(bg2);
+            ((JButton) comp).setForeground(fg);
+        } else if (comp instanceof JTextField) {
+            comp.setBackground(bg2);
+            ((JTextField) comp).setForeground(fg);
+            ((JTextField) comp).setCaretColor(fg);
+            ((JTextField) comp).setSelectedTextColor(bg2);
+            ((JTextField) comp).setSelectionColor(new Color(0x455A64));
+        } else if (comp instanceof JComboBox) {
+            comp.setBackground(bg2);
+            ((JComboBox<?>) comp).setForeground(fg);
+        } else if (comp instanceof JList) {
+            comp.setBackground(bg2);
+            ((JList<?>) comp).setForeground(fg);
+        } else if (comp instanceof JScrollPane) {
+            comp.setBackground(bg);
+            JViewport vp = ((JScrollPane) comp).getViewport();
+            if (vp != null) vp.setBackground(bg);
+        }
+        for (Component child : comp.getComponents()) {
+            if (child instanceof JComponent) tint((JComponent) child, bg, bg2, fg);
+        }
     }
 
     private JPanel initializeCleanroomPicker(List<CleanroomRelease> eligibleReleases) {
