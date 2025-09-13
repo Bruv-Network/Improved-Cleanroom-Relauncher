@@ -1,6 +1,13 @@
 # Changelog
 
-## [0.4.0] - 2025-08-28
+### [0.3.1] - 2025-09-13
+- GraalVM support
+- Dark mode
+- Download Speed and ETA
+- Automatic retries
+- Partial download resuming
+
+## [0.3.0] - 2025-08-28
 
 ### Added
 - Java 21 auto-download.
