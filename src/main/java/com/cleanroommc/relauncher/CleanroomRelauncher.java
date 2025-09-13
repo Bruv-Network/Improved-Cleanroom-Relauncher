@@ -7,7 +7,7 @@ import com.cleanroommc.relauncher.download.CleanroomRelease;
 import com.cleanroommc.relauncher.download.cache.CleanroomCache;
 import com.cleanroommc.relauncher.download.schema.Version;
 import com.cleanroommc.relauncher.gui.RelauncherGUI;
-import com.cleanroommc.relauncher.download.java.JavaTemurinDownloader;
+import com.cleanroommc.relauncher.download.java.JavaDownloader;
 import com.cleanroommc.relauncher.download.GlobalDownloader;
 import com.cleanroommc.relauncher.gui.SetupProgressDialog;
 import com.google.gson.Gson;
@@ -23,7 +23,6 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import java.io.*;
-import java.lang.management.ManagementFactory;
 import java.nio.file.*;
 import java.util.*;
 import java.util.jar.Manifest;
@@ -44,10 +43,24 @@ public class CleanroomRelauncher {
         if (javaPath == null || javaPath.isEmpty()) return null;
         String normalized = javaPath.replace('\\', '/');
         try {
-            Pattern pat = Pattern.compile("temurin-(\\d+)-(windows|linux|mac)-(x64|aarch64)", Pattern.CASE_INSENSITIVE);
+            Pattern pat = Pattern.compile("(temurin|graalvm)-(\\d+)-(windows|linux|mac)-(x64|aarch64)", Pattern.CASE_INSENSITIVE);
             Matcher m = pat.matcher(normalized);
             if (m.find()) {
-                return Integer.parseInt(m.group(1));
+                return Integer.parseInt(m.group(2));
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    private static String extractVendorFromPath(String javaPath) {
+        if (javaPath == null || javaPath.isEmpty()) return null;
+        String normalized = javaPath.replace('\\', '/');
+        try {
+            Pattern pat = Pattern.compile("(temurin|graalvm)-(\\d+)-(windows|linux|mac)-(x64|aarch64)", Pattern.CASE_INSENSITIVE);
+            Matcher m = pat.matcher(normalized);
+            if (m.find()) {
+                return m.group(1).toLowerCase(Locale.ROOT);
             }
         } catch (Throwable ignored) {
         }
@@ -182,10 +195,16 @@ public class CleanroomRelauncher {
         AtomicReference<SetupProgressDialog> setupDialogRef = new AtomicReference<>(null);
         // Determine desired Java version from config and auto-switch if current path differs
         int desiredJava = CONFIG.getJavaVersion();
+        String desiredVendor = CONFIG.getJavaVendor();
         Integer currentJavaFromPath = extractTemurinMajorFromPath(javaPath);
         if (javaPath != null && (currentJavaFromPath == null || currentJavaFromPath.intValue() != desiredJava)) {
-            LOGGER.info("Configured Java version {} differs from current Java path ({}). Switching to Temurin {}...", desiredJava, javaPath, desiredJava);
+            LOGGER.info("Configured Java version {} differs from current Java path ({}). Switching to {} {}...", desiredJava, javaPath, desiredVendor, desiredJava);
             javaPath = null; // trigger auto-setup to fetch the desired Java version
+        }
+        String currentVendorFromPath = extractVendorFromPath(javaPath);
+        if (javaPath != null && currentVendorFromPath != null && !currentVendorFromPath.equalsIgnoreCase(desiredVendor)) {
+            LOGGER.info("Configured Java vendor '{}' differs from current vendor '{}' at {}. Switching vendor and re-downloading if necessary...", desiredVendor, currentVendorFromPath, javaPath);
+            javaPath = null; // trigger auto-setup to fetch the desired vendor distribution
         }
         boolean initialSetupNeeded = (selected == null) || (javaPath == null);
         if (initialSetupNeeded) {
@@ -199,16 +218,18 @@ public class CleanroomRelauncher {
                 {
                     SetupProgressDialog dlg = SetupProgressDialog.show("Setting Up Necessary Libraries (Only Happens Once)");
                     setupDialogRef.set(dlg);
-                    dlg.setMessage("Downloading Java " + desiredJava + " (Temurin)...");
+                    String vendorName = (desiredVendor != null && desiredVendor.equalsIgnoreCase("graalvm")) ? "GraalVM" : "Temurin";
+                    dlg.setMessage("Downloading Java " + desiredJava + " (" + vendorName + ")...");
                     dlg.setIndeterminate(true);
                 }
                 try {
                     String os = System.getProperty("os.name").toLowerCase(Locale.ROOT);
                     if (os.contains("win")) {
-                        javaPath = JavaTemurinDownloader.ensureWindowsJava(
+                        javaPath = JavaDownloader.ensureWindowsJava(
                                 CleanroomRelauncher.CACHE_DIR.resolve("java"),
                                 desiredJava,
-                                new JavaTemurinDownloader.ProgressListener() {
+                                desiredVendor,
+                                new JavaDownloader.ProgressListener() {
                                     private long total = -1;
                                     @Override
                                     public void onStart(long totalBytes) {
@@ -234,10 +255,11 @@ public class CleanroomRelauncher {
                                 }
                         );
                     } else if (os.contains("mac")) {
-                        javaPath = JavaTemurinDownloader.ensureMacJava(
+                        javaPath = JavaDownloader.ensureMacJava(
                                 CleanroomRelauncher.CACHE_DIR.resolve("java"),
                                 desiredJava,
-                                new JavaTemurinDownloader.ProgressListener() {
+                                desiredVendor,
+                                new JavaDownloader.ProgressListener() {
                                     private long total = -1;
                                     @Override
                                     public void onStart(long totalBytes) {
@@ -263,10 +285,11 @@ public class CleanroomRelauncher {
                                 }
                         );
                     } else if (os.contains("nux") || os.contains("nix") || os.contains("aix") || os.contains("linux")) {
-                        javaPath = JavaTemurinDownloader.ensureLinuxJava(
+                        javaPath = JavaDownloader.ensureLinuxJava(
                                 CleanroomRelauncher.CACHE_DIR.resolve("java"),
                                 desiredJava,
-                                new JavaTemurinDownloader.ProgressListener() {
+                                desiredVendor,
+                                new JavaDownloader.ProgressListener() {
                                     private long total = -1;
                                     @Override
                                     public void onStart(long totalBytes) {
@@ -304,8 +327,9 @@ public class CleanroomRelauncher {
             CONFIG.setLatestCleanroomVersion(latestRelease.name);
             if (javaPath != null) CONFIG.setJavaExecutablePath(javaPath);
             CONFIG.setJavaArguments(javaArgs);
-            // persist desired java version so users can change it in config pre-first-run
+            // persist desired java version/vendor so users can change them in config pre-first-run
             CONFIG.setJavaVersion(CONFIG.getJavaVersion());
+            CONFIG.setJavaVendor(CONFIG.getJavaVendor());
             CONFIG.save();
             // If Java download failed, ensure any progress dialog is closed before falling back to GUI
             if (javaPath == null) {
