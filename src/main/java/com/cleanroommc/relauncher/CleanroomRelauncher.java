@@ -198,8 +198,12 @@ public class CleanroomRelauncher {
         String notedLatestVersion = CONFIG.getLatestCleanroomVersion();
         String javaPath = CONFIG.getJavaExecutablePath();
         String javaArgs = CONFIG.getJavaArguments();
+        boolean autoUpdate = CONFIG.isAutoUpdate();
         boolean needsNotifyLatest = notedLatestVersion == null || !notedLatestVersion.equals(latestRelease.name);
-        if (selectedVersion != null) {
+        if (autoUpdate) {
+            selected = latestRelease;
+            needsNotifyLatest = false;
+        } else if (selectedVersion != null) {
             selected = releases.stream().filter(cr -> cr.name.equals(selectedVersion)).findFirst().orElse(null);
         }
         if (javaPath != null && !new File(javaPath).isFile()) {
@@ -420,7 +424,7 @@ public class CleanroomRelauncher {
         }
 
         // Show GUI only if still missing required selections, or if no auto-setup occurred and a newer latest is available
-        boolean shouldShowGui = (selected == null || javaPath == null) || (!didAutoSetup && needsNotifyLatest);
+        boolean shouldShowGui = (selected == null || javaPath == null) || (!didAutoSetup && needsNotifyLatest && !autoUpdate);
         if (shouldShowGui) {
             {
                 SetupProgressDialog dlg = setupDialogRef.getAndSet(null); // safety: ensure dialog is not left open when showing GUI
@@ -433,17 +437,30 @@ public class CleanroomRelauncher {
                 $.selected = fSelected;
                 $.javaPath = fJavaPath;
                 $.javaArgs = fJavaArgs;
+                $.autoUpdate = CleanroomRelauncher.CONFIG.isAutoUpdate();
             });
 
             selected = gui.selected;
             javaPath = gui.javaPath;
             javaArgs = gui.javaArgs;
+            if (gui.autoUpdate) {
+                selected = latestRelease;
+            }
 
             CONFIG.setCleanroomVersion(selected.name);
             CONFIG.setLatestCleanroomVersion(latestRelease.name);
             CONFIG.setJavaExecutablePath(javaPath);
             CONFIG.setJavaArguments(javaArgs);
+            CONFIG.setAutoUpdate(gui.autoUpdate);
 
+            CONFIG.save();
+        }
+
+        if (!didAutoSetup && !shouldShowGui && selected != null) {
+            CONFIG.setCleanroomVersion(selected.name);
+            CONFIG.setLatestCleanroomVersion(latestRelease.name);
+            if (javaPath != null) CONFIG.setJavaExecutablePath(javaPath);
+            CONFIG.setJavaArguments(javaArgs);
             CONFIG.save();
         }
 

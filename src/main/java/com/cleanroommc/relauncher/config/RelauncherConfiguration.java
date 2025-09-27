@@ -43,6 +43,8 @@ public class RelauncherConfiguration {
     private String javaVendor = "adoptium";
     @SerializedName("darkMode")
     private boolean darkMode = true;
+    @SerializedName("autoUpdate")
+    private boolean autoUpdate = false;
 
     public String getCleanroomVersion() {
         return cleanroomVersion;
@@ -72,6 +74,10 @@ public class RelauncherConfiguration {
         return darkMode;
     }
 
+    public boolean isAutoUpdate() {
+        return autoUpdate;
+    }
+
     public void setCleanroomVersion(String cleanroomVersion) {
         this.cleanroomVersion = cleanroomVersion;
     }
@@ -98,6 +104,10 @@ public class RelauncherConfiguration {
 
     public void setDarkMode(boolean darkMode) {
         this.darkMode = darkMode;
+    }
+
+    public void setAutoUpdate(boolean autoUpdate) {
+        this.autoUpdate = autoUpdate;
     }
 
     public void save() {
@@ -131,6 +141,11 @@ public class RelauncherConfiguration {
             // darkMode
             writer.write("  // UI theme: dark mode on/off (default: true). When enabled, all relauncher UI uses a dark theme." + nl);
             writer.write("  \"darkMode\": " + (isDarkMode() ? "true" : "false") + "," + nl);
+
+            // autoUpdate
+            writer.write("  // Automatically switch to the latest Cleanroom release on launch." + nl);
+            writer.write("  // When true, the relauncher will always select the latest release, skipping update prompts." + nl);
+            writer.write("  \"autoUpdate\": " + (isAutoUpdate() ? "true" : "false") + "," + nl);
 
             // javaPath
             writer.write("  // Optional absolute path to a Java executable. Leave null/empty to let the relauncher manage Java automatically." + nl);

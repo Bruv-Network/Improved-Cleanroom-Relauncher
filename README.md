@@ -19,8 +19,9 @@ Features
 - First-run automation
     - Auto-selects the latest Cleanroom Loader release
     - Progress popup: "Setting Up Necessary Libraries (Only Happens Once)" with download progress
-- Auto-switch Java when config javaVersion changes
-- Automatic download resuming and retrying
+    - Auto-switch Java when config javaVersion changes
+    - Auto-update to the latest Cleanroom release on launch (configurable)
+    - Automatic download resuming and retrying
 
 First run setup
 - If no Java path is configured, the relauncher downloads Java for your OS/architecture and config javaVersion.
@@ -32,6 +33,7 @@ Configuration
 - Key options:
     - javaVersion: desired major version (e.g., 21, 24). Changing this triggers an automatic re-download and switch.
     - javaExecutablePath: set if you want to force a specific Java. If it’s not valid or mismatched with javaVersion, the relauncher will auto-download the correct one.
+    - autoUpdate: when true, always selects the latest Cleanroom release on launch and updates the selected version automatically. Default: false.
 
 Cache locations
 - Java is cached under: &lt;UserHome&gt;/.cleanroom/relauncher/java/&lt;distribution&gt;-&lt;version&gt;-&lt;os&gt;-&lt;arch&gt;

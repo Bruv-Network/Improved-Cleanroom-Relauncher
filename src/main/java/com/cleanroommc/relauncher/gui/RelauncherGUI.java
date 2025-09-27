@@ -146,6 +146,7 @@ public class RelauncherGUI extends JDialog {
 
     public CleanroomRelease selected;
     public String javaPath, javaArgs;
+    public boolean autoUpdate;
 
     private JFrame frame;
 
@@ -329,6 +330,13 @@ public class RelauncherGUI extends JDialog {
         releaseBox.setMaximumRowCount(5);
         releaseBox.addActionListener(e -> selected = (CleanroomRelease) releaseBox.getSelectedItem());
         dropdown.add(releaseBox, BorderLayout.CENTER);
+
+        // Auto-update toggle
+        select.add(Box.createRigidArea(new Dimension(0, 10)));
+        JCheckBox autoUpdateBox = new JCheckBox("Auto-update to latest Cleanroom on launch");
+        autoUpdateBox.setSelected(autoUpdate);
+        autoUpdateBox.addActionListener(e -> autoUpdate = autoUpdateBox.isSelected());
+        select.add(autoUpdateBox);
 
         return cleanroomPicker;
     }
