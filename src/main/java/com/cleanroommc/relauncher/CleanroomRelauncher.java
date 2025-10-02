@@ -476,40 +476,32 @@ public class CleanroomRelauncher {
         CleanroomCache releaseCache = CleanroomCache.of(selected);
 
         LOGGER.info("Preparing Cleanroom v{} and its libraries...", selected.name);
-        if (didAutoSetup) {
-            if (setupDialogRef.get() == null) {
-                setupDialogRef.set(SetupProgressDialog.show("Setting Up Necessary Libraries (Only Happens Once)"));
-            }
-            {
-                SetupProgressDialog dlg = setupDialogRef.get();
-                if (dlg != null) {
-                    dlg.setMessage("Downloading Cleanroom libraries...");
-                    dlg.setIndeterminate(false);
-                    dlg.setProgressPercent(0);
-                }
-            }
-            GlobalDownloader.INSTANCE.setProgressListener(new GlobalDownloader.TaskProgressListener() {
-                private int total = 0;
-                @Override
-                public void onTotal(int total) {
-                    this.total = Math.max(1, total);
-                    SetupProgressDialog dlg = setupDialogRef.get();
-                    if (dlg != null) dlg.setProgressPercent(0);
-                }
-                @Override
-                public void onCompleted(int completed, int total) {
-                    int pct = (int) ((completed * 100.0f) / Math.max(1, total));
-                    SetupProgressDialog dlg = setupDialogRef.get();
-                    if (dlg != null) dlg.setProgressPercent(pct);
-                }
-            });
+        SetupProgressDialog dlg = setupDialogRef.get();
+        if (dlg == null) {
+            dlg = SetupProgressDialog.show("Setting Up Necessary Libraries (Only Happens Once)");
+            setupDialogRef.set(dlg);
         }
+        dlg.setMessage("Downloading Cleanroom libraries...");
+        dlg.setIndeterminate(false);
+        dlg.setProgressPercent(0);
+        final SetupProgressDialog finalDlg = dlg;
+        GlobalDownloader.INSTANCE.setProgressListener(new GlobalDownloader.TaskProgressListener() {
+            private int total = 0;
+            @Override
+            public void onTotal(int total) {
+                this.total = Math.max(1, total);
+                finalDlg.setProgressPercent(0);
+            }
+            @Override
+            public void onCompleted(int completed, int total) {
+                int pct = (int) ((completed * 100.0f) / Math.max(1, total));
+                finalDlg.setProgressPercent(pct);
+            }
+        });
         List<Version> versions = versions(releaseCache);
-        if (didAutoSetup) {
-            SetupProgressDialog dlg = setupDialogRef.getAndSet(null);
-            if (dlg != null) dlg.close();
-            GlobalDownloader.INSTANCE.setProgressListener(null);
-        }
+        GlobalDownloader.INSTANCE.setProgressListener(null);
+        SetupProgressDialog closeDlg = setupDialogRef.getAndSet(null);
+        if (closeDlg != null) closeDlg.close();
 
         String wrapperClassPath = getOrExtract();
 
