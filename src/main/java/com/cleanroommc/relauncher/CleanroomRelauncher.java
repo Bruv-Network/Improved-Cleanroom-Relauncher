@@ -96,17 +96,20 @@ public class CleanroomRelauncher {
 
     private static class DownloadSpeedCalculator {
         private final java.util.LinkedList<long[]> samples = new java.util.LinkedList<>();
-        private static final long WINDOW_NS = 5_000_000_000L; // 5 seconds
+        private static final long WINDOW_NS = 10_000_000_000L; // 10 seconds
+        private double smoothedETA = -1.0;
+        private static final double ETA_SMOOTHING_ALPHA = 0.05; // Lower = smoother (0.0 to 1.0)
 
         public void reset() {
             samples.clear();
+            smoothedETA = -1.0;
         }
 
         public double calculateSpeed(long downloadedBytes) {
             long nowNs = System.nanoTime();
             samples.add(new long[]{nowNs, downloadedBytes});
 
-            // Remove samples older than 5 seconds
+            // Remove samples older than 10 seconds
             while (!samples.isEmpty() && (nowNs - samples.getFirst()[0]) > WINDOW_NS) {
                 samples.removeFirst();
             }
@@ -122,6 +125,21 @@ public class CleanroomRelauncher {
                 }
             }
             return 0.0;
+        }
+
+        public long calculateSmoothedETA(long totalBytes, long downloadedBytes, double speed) {
+            if (speed <= 0) return -1;
+            long remaining = Math.max(0L, totalBytes - downloadedBytes);
+            double rawETA = remaining / speed;
+            
+            // Exponential moving average for smoother ETA
+            if (smoothedETA < 0) {
+                smoothedETA = rawETA;
+            } else {
+                smoothedETA = (ETA_SMOOTHING_ALPHA * rawETA) + ((1.0 - ETA_SMOOTHING_ALPHA) * smoothedETA);
+            }
+            
+            return (long) Math.ceil(smoothedETA);
         }
     }
 
@@ -319,7 +337,7 @@ public class CleanroomRelauncher {
                                             if (dlg != null) {
                                                 double bps = speedCalc.calculateSpeed(downloadedBytes);
                                                 long remaining = Math.max(0L, total - downloadedBytes);
-                                                long etaSec = bps > 0 ? (long) Math.ceil(remaining / bps) : -1;
+                                                long etaSec = speedCalc.calculateSmoothedETA(total, downloadedBytes, bps);
                                                 String text = String.format(Locale.ROOT, "%d%%  %s  ETA %s", pct, formatSpeed(bps), formatETA(etaSec));
                                                 dlg.setProgress(pct, text);
                                             }
@@ -368,7 +386,7 @@ public class CleanroomRelauncher {
                                             if (dlg != null) {
                                                 double speed = speedCalculator.calculateSpeed(downloadedBytes);
                                                 long remaining = Math.max(0L, total - downloadedBytes);
-                                                long etaSec = speed > 0 ? (long) Math.ceil(remaining / speed) : -1;
+                                                long etaSec = speedCalculator.calculateSmoothedETA(total, downloadedBytes, speed);
                                                 String text = String.format(Locale.ROOT, "%d%%  %s  ETA %s", pct, formatSpeed(speed), formatETA(etaSec));
                                                 dlg.setProgress(pct, text);
                                             }
@@ -417,7 +435,7 @@ public class CleanroomRelauncher {
                                             if (dlg != null) {
                                                 double speed = speedCalculator.calculateSpeed(downloadedBytes);
                                                 long remaining = Math.max(0L, total - downloadedBytes);
-                                                long etaSec = speed > 0 ? (long) Math.ceil(remaining / speed) : -1;
+                                                long etaSec = speedCalculator.calculateSmoothedETA(total, downloadedBytes, speed);
                                                 String text = String.format(Locale.ROOT, "%d%%  %s  ETA %s", pct, formatSpeed(speed), formatETA(etaSec));
                                                 dlg.setProgress(pct, text);
                                             }
