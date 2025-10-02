@@ -4,11 +4,11 @@ import com.cleanroommc.javautils.JavaUtils;
 import com.cleanroommc.javautils.api.JavaVersion;
 import com.cleanroommc.relauncher.config.RelauncherConfiguration;
 import com.cleanroommc.relauncher.download.CleanroomRelease;
+import com.cleanroommc.relauncher.download.GlobalDownloader;
 import com.cleanroommc.relauncher.download.cache.CleanroomCache;
+import com.cleanroommc.relauncher.download.java.JavaDownloader;
 import com.cleanroommc.relauncher.download.schema.Version;
 import com.cleanroommc.relauncher.gui.RelauncherGUI;
-import com.cleanroommc.relauncher.download.java.JavaDownloader;
-import com.cleanroommc.relauncher.download.GlobalDownloader;
 import com.cleanroommc.relauncher.gui.SetupProgressDialog;
 import com.google.gson.Gson;
 import net.minecraft.launchwrapper.Launch;
@@ -60,11 +60,20 @@ public class CleanroomRelauncher {
             Pattern pat = Pattern.compile("(temurin|graalvm)-(\\d+)-(windows|linux|mac)-(x64|aarch64)", Pattern.CASE_INSENSITIVE);
             Matcher m = pat.matcher(normalized);
             if (m.find()) {
-                return m.group(1).toLowerCase(Locale.ROOT);
+                return normalizeVendorName(m.group(1).toLowerCase(Locale.ROOT));
             }
         } catch (Throwable ignored) {
         }
         return null;
+    }
+
+    private static String normalizeVendorName(String vendor) {
+        if (vendor == null || vendor.isEmpty()) return "adoptium";
+        String lower = vendor.toLowerCase(Locale.ROOT);
+        if (lower.equals("temurin") || lower.equals("adoptium")) {
+            return "adoptium";
+        }
+        return lower;
     }
 
     private static String formatSpeed(double bytesPerSec) {
@@ -217,13 +226,13 @@ public class CleanroomRelauncher {
         AtomicReference<SetupProgressDialog> setupDialogRef = new AtomicReference<>(null);
         // Determine desired Java version from config and auto-switch if current path differs
         int desiredJava = CONFIG.getJavaVersion();
-        String desiredVendor = CONFIG.getJavaVendor();
+        String desiredVendor = normalizeVendorName(CONFIG.getJavaVendor());
         Integer currentJavaFromPath = extractTemurinMajorFromPath(javaPath);
         if (javaPath != null && (currentJavaFromPath == null || currentJavaFromPath.intValue() != desiredJava)) {
             LOGGER.info("Configured Java version {} differs from current Java path ({}). Switching to {} {}...", desiredJava, javaPath, desiredVendor, desiredJava);
             javaPath = null; // trigger auto-setup to fetch the desired Java version
         }
-        String currentVendorFromPath = extractVendorFromPath(javaPath);
+        String currentVendorFromPath = normalizeVendorName(extractVendorFromPath(javaPath));
         if (javaPath != null && currentVendorFromPath != null && !currentVendorFromPath.equalsIgnoreCase(desiredVendor)) {
             LOGGER.info("Configured Java vendor '{}' differs from current vendor '{}' at {}. Switching vendor and re-downloading if necessary...", desiredVendor, currentVendorFromPath, javaPath);
             javaPath = null; // trigger auto-setup to fetch the desired vendor distribution
