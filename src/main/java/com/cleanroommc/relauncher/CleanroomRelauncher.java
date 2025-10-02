@@ -94,6 +94,37 @@ public class CleanroomRelauncher {
         return String.format(Locale.ROOT, "%02d:%02d", m, s);
     }
 
+    private static class DownloadSpeedCalculator {
+        private final java.util.LinkedList<long[]> samples = new java.util.LinkedList<>();
+        private static final long WINDOW_NS = 5_000_000_000L; // 5 seconds
+
+        public void reset() {
+            samples.clear();
+        }
+
+        public double calculateSpeed(long downloadedBytes) {
+            long nowNs = System.nanoTime();
+            samples.add(new long[]{nowNs, downloadedBytes});
+
+            // Remove samples older than 5 seconds
+            while (!samples.isEmpty() && (nowNs - samples.getFirst()[0]) > WINDOW_NS) {
+                samples.removeFirst();
+            }
+
+            // Calculate speed from oldest sample in window
+            if (samples.size() > 1) {
+                long[] oldest = samples.getFirst();
+                long elapsedNs = nowNs - oldest[0];
+                long bytesInWindow = downloadedBytes - oldest[1];
+                double elapsedSec = elapsedNs / 1_000_000_000.0;
+                if (elapsedSec > 0) {
+                    return bytesInWindow / elapsedSec;
+                }
+            }
+            return 0.0;
+        }
+    }
+
     private static boolean isCleanroom() {
         try {
             Class.forName("com.cleanroommc.boot.Main");
@@ -262,12 +293,13 @@ public class CleanroomRelauncher {
                                 desiredVendor,
                                 new JavaDownloader.ProgressListener() {
                                     private long total = -1;
-                                    private long startNs = -1;
                                     private int lastPct = 0;
+                                    private final DownloadSpeedCalculator speedCalc = new DownloadSpeedCalculator();
+                                    
                                     @Override
                                     public void onStart(long totalBytes) {
                                         this.total = totalBytes;
-                                        this.startNs = System.nanoTime();
+                                        speedCalc.reset();
                                         SetupProgressDialog dlg = setupDialogRef.get();
                                         if (dlg != null) {
                                             if (totalBytes > 0) {
@@ -285,9 +317,7 @@ public class CleanroomRelauncher {
                                             lastPct = pct;
                                             SetupProgressDialog dlg = setupDialogRef.get();
                                             if (dlg != null) {
-                                                long elapsedNs = System.nanoTime() - startNs;
-                                                double elapsedSec = elapsedNs > 0 ? (elapsedNs / 1_000_000_000.0) : 0.0;
-                                                double bps = elapsedSec > 0 ? (downloadedBytes / elapsedSec) : 0.0;
+                                                double bps = speedCalc.calculateSpeed(downloadedBytes);
                                                 long remaining = Math.max(0L, total - downloadedBytes);
                                                 long etaSec = bps > 0 ? (long) Math.ceil(remaining / bps) : -1;
                                                 String text = String.format(Locale.ROOT, "%d%%  %s  ETA %s", pct, formatSpeed(bps), formatETA(etaSec));
@@ -312,13 +342,13 @@ public class CleanroomRelauncher {
                                 desiredJava,
                                 desiredVendor,
                                 new JavaDownloader.ProgressListener() {
+                                    private DownloadSpeedCalculator speedCalculator = new DownloadSpeedCalculator();
                                     private long total = -1;
-                                    private long startNs = -1;
                                     private int lastPct = 0;
                                     @Override
                                     public void onStart(long totalBytes) {
                                         this.total = totalBytes;
-                                        this.startNs = System.nanoTime();
+                                        speedCalculator.reset();
                                         SetupProgressDialog dlg = setupDialogRef.get();
                                         if (dlg != null) {
                                             if (totalBytes > 0) {
@@ -336,12 +366,10 @@ public class CleanroomRelauncher {
                                             lastPct = pct;
                                             SetupProgressDialog dlg = setupDialogRef.get();
                                             if (dlg != null) {
-                                                long elapsedNs = System.nanoTime() - startNs;
-                                                double elapsedSec = elapsedNs > 0 ? (elapsedNs / 1_000_000_000.0) : 0.0;
-                                                double bps = elapsedSec > 0 ? (downloadedBytes / elapsedSec) : 0.0;
+                                                double speed = speedCalculator.calculateSpeed(downloadedBytes);
                                                 long remaining = Math.max(0L, total - downloadedBytes);
-                                                long etaSec = bps > 0 ? (long) Math.ceil(remaining / bps) : -1;
-                                                String text = String.format(Locale.ROOT, "%d%%  %s  ETA %s", pct, formatSpeed(bps), formatETA(etaSec));
+                                                long etaSec = speed > 0 ? (long) Math.ceil(remaining / speed) : -1;
+                                                String text = String.format(Locale.ROOT, "%d%%  %s  ETA %s", pct, formatSpeed(speed), formatETA(etaSec));
                                                 dlg.setProgress(pct, text);
                                             }
                                         }
@@ -363,13 +391,13 @@ public class CleanroomRelauncher {
                                 desiredJava,
                                 desiredVendor,
                                 new JavaDownloader.ProgressListener() {
+                                    private DownloadSpeedCalculator speedCalculator = new DownloadSpeedCalculator();
                                     private long total = -1;
-                                    private long startNs = -1;
                                     private int lastPct = 0;
                                     @Override
                                     public void onStart(long totalBytes) {
                                         this.total = totalBytes;
-                                        this.startNs = System.nanoTime();
+                                        speedCalculator.reset();
                                         SetupProgressDialog dlg = setupDialogRef.get();
                                         if (dlg != null) {
                                             if (totalBytes > 0) {
@@ -387,12 +415,10 @@ public class CleanroomRelauncher {
                                             lastPct = pct;
                                             SetupProgressDialog dlg = setupDialogRef.get();
                                             if (dlg != null) {
-                                                long elapsedNs = System.nanoTime() - startNs;
-                                                double elapsedSec = elapsedNs > 0 ? (elapsedNs / 1_000_000_000.0) : 0.0;
-                                                double bps = elapsedSec > 0 ? (downloadedBytes / elapsedSec) : 0.0;
+                                                double speed = speedCalculator.calculateSpeed(downloadedBytes);
                                                 long remaining = Math.max(0L, total - downloadedBytes);
-                                                long etaSec = bps > 0 ? (long) Math.ceil(remaining / bps) : -1;
-                                                String text = String.format(Locale.ROOT, "%d%%  %s  ETA %s", pct, formatSpeed(bps), formatETA(etaSec));
+                                                long etaSec = speed > 0 ? (long) Math.ceil(remaining / speed) : -1;
+                                                String text = String.format(Locale.ROOT, "%d%%  %s  ETA %s", pct, formatSpeed(speed), formatETA(etaSec));
                                                 dlg.setProgress(pct, text);
                                             }
                                         }
