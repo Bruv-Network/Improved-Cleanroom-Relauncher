@@ -24,6 +24,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.Set;
+import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -92,6 +93,8 @@ public final class JavaDownloader {
         Files.createDirectories(targetDir);
         Path archiveFile = baseDir.resolve(String.format("%s-%d-%s-%s%s", vendorSlug, majorVersion, os, arch, archiveExt));
 
+        cleanupStalePartialFiles(baseDir, archiveFile.getFileName().toString());
+        
         downloadWithVerification(downloadInfo.downloadUrl, archiveFile, progressListener, MAX_DOWNLOAD_RETRIES);
 
         if (archiveExt.equals(".zip")) {
@@ -765,6 +768,29 @@ public final class JavaDownloader {
             sb.append(String.format("%02x", b & 0xff));
         }
         return sb.toString();
+    }
+
+    private static void cleanupStalePartialFiles(Path baseDir, String expectedFileName) {
+        if (!Files.exists(baseDir)) {
+            return;
+        }
+        
+        try (Stream<Path> files = Files.list(baseDir)) {
+            files.filter(path -> {
+                String name = path.getFileName().toString();
+                return (name.endsWith(".part") || name.endsWith(".part.meta")) && 
+                       !name.startsWith(expectedFileName);
+            }).forEach(staleFile -> {
+                try {
+                    Files.deleteIfExists(staleFile);
+                    CleanroomRelauncher.LOGGER.info("Cleaned up stale partial file: {}", staleFile.getFileName());
+                } catch (IOException e) {
+                    CleanroomRelauncher.LOGGER.warn("Failed to delete stale partial file {}: {}", staleFile.getFileName(), e.toString());
+                }
+            });
+        } catch (IOException e) {
+            CleanroomRelauncher.LOGGER.warn("Failed to cleanup stale partial files: {}", e.toString());
+        }
     }
 
     private static byte[] hexToBytes(String hex) {

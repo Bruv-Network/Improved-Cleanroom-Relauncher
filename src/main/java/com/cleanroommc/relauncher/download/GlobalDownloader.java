@@ -81,6 +81,8 @@ public final class GlobalDownloader {
         }
         
         CleanroomRelauncher.LOGGER.info("Starting download of {} library files...", totalTasks);
+        
+        cleanupStaleTempFiles();
 
         totalBytesAcrossFiles.set(0);
         downloadedBytesAcrossFiles.set(0);
@@ -272,6 +274,49 @@ public final class GlobalDownloader {
         }
         
         throw lastException != null ? lastException : new IOException("Download failed: " + urlStr);
+    }
+
+    private void cleanupStaleTempFiles() {
+        Set<Path> currentDirs = new HashSet<>();
+        for (DownloadTask task : downloadTasks) {
+            Path parent = task.destination.toPath().getParent();
+            if (parent != null) {
+                currentDirs.add(parent);
+            }
+        }
+        
+        for (Path dir : currentDirs) {
+            if (!Files.exists(dir)) {
+                continue;
+            }
+            
+            Set<String> currentFiles = new HashSet<>();
+            for (DownloadTask task : downloadTasks) {
+                if (task.destination.toPath().getParent().equals(dir)) {
+                    currentFiles.add(task.destination.getName());
+                }
+            }
+            
+            try (java.util.stream.Stream<Path> files = Files.list(dir)) {
+                files.filter(path -> {
+                    String name = path.getFileName().toString();
+                    if (!name.endsWith(".tmp")) {
+                        return false;
+                    }
+                    String baseName = name.substring(0, name.length() - 4);
+                    return !currentFiles.contains(baseName);
+                }).forEach(staleFile -> {
+                    try {
+                        Files.deleteIfExists(staleFile);
+                        CleanroomRelauncher.LOGGER.info("Cleaned up stale temp file: {}", staleFile.getFileName());
+                    } catch (IOException e) {
+                        CleanroomRelauncher.LOGGER.debug("Failed to delete stale temp file {}: {}", staleFile.getFileName(), e.toString());
+                    }
+                });
+            } catch (IOException e) {
+                CleanroomRelauncher.LOGGER.debug("Failed to list directory {} for cleanup: {}", dir, e.toString());
+            }
+        }
     }
 
     @FunctionalInterface
