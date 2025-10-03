@@ -1,6 +1,7 @@
 package com.cleanroommc.relauncher.download.java;
 
 import com.cleanroommc.relauncher.CleanroomRelauncher;
+import com.cleanroommc.relauncher.download.cache.CacheVerification;
 
 import java.io.*;
 import java.net.HttpURLConnection;
@@ -9,6 +10,19 @@ import java.nio.file.*;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Locale;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.BitSet;
+import java.util.Properties;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -23,12 +37,152 @@ import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
 
 public final class JavaDownloader {
 
+    private static final int DEFAULT_JAVA_VERSION = 21;
+    private static final int MAX_DOWNLOAD_RETRIES = 3;
+    private static final long CHUNK_SIZE = 4L * 1024L * 1024L; // 4 MiB
+    private static final int CHUNK_TIMEOUT_MINUTES = 10;
+    private static final int CHUNK_RETRY_ATTEMPTS = 3;
+    private static final int CONNECT_TIMEOUT_MS = 30_000;
+    private static final int READ_TIMEOUT_MS = 120_000;
+    private static final int REDIRECT_LIMIT = 7;
+    private static final int TEST_RANGE_TIMEOUT_MS = 15_000;
+    private static final String USER_AGENT = "Mozilla/5.0 CleanroomRelauncher/1.0";
+
     private JavaDownloader() {}
 
     public interface ProgressListener {
         void onStart(long totalBytes);
         void onProgress(long downloadedBytes, long totalBytes);
         default void onRetryScheduled(int attempt, int maxAttempts, long delayMs) {}
+    }
+
+    private static String detectArch() {
+        String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
+        return (arch.contains("aarch64") || arch.contains("arm64")) ? "aarch64" : "x64";
+    }
+
+    public static String ensureWindowsJava(Path baseDir, int majorVersion, String vendor, ProgressListener progressListener) throws IOException {
+        return ensureJava(baseDir, majorVersion, vendor, progressListener, "windows", ".zip");
+    }
+
+    public static String ensureLinuxJava(Path baseDir, int majorVersion, String vendor, ProgressListener progressListener) throws IOException {
+        return ensureJava(baseDir, majorVersion, vendor, progressListener, "linux", ".tar.gz");
+    }
+
+    public static String ensureMacJava(Path baseDir, int majorVersion, String vendor, ProgressListener progressListener) throws IOException {
+        return ensureJava(baseDir, majorVersion, vendor, progressListener, "mac", ".tar.gz");
+    }
+
+    private static String ensureJava(Path baseDir, int majorVersion, String vendor, ProgressListener progressListener, String os, String archiveExt) throws IOException {
+        if (majorVersion <= 0) majorVersion = DEFAULT_JAVA_VERSION;
+        String arch = detectArch();
+        
+        Path temDir = baseDir.resolve(String.format("temurin-%d-%s-%s", majorVersion, os, arch));
+        Path graDir = baseDir.resolve(String.format("graalvm-%d-%s-%s", majorVersion, os, arch));
+        boolean wantGraal = vendor != null && vendor.equalsIgnoreCase("graalvm");
+        Path javaBin = wantGraal ? findJavaBinary(graDir) : findJavaBinary(temDir);
+        if (javaBin != null && Files.isRegularFile(javaBin)) {
+            return javaBin.toAbsolutePath().toString();
+        }
+
+        DownloadInfo downloadInfo = resolveDownloadUrl(majorVersion, os, arch, vendor);
+        
+        String vendorSlug = downloadInfo.vendorUsed;
+        Path targetDir = baseDir.resolve(String.format("%s-%d-%s-%s", vendorSlug, majorVersion, os, arch));
+        Files.createDirectories(targetDir);
+        Path archiveFile = baseDir.resolve(String.format("%s-%d-%s-%s%s", vendorSlug, majorVersion, os, arch, archiveExt));
+
+        downloadWithVerification(downloadInfo.downloadUrl, archiveFile, progressListener, MAX_DOWNLOAD_RETRIES);
+
+        if (archiveExt.equals(".zip")) {
+            extractZip(archiveFile, targetDir);
+        } else {
+            extractTarGz(archiveFile, targetDir);
+        }
+        normalizeExtractedRoot(targetDir, majorVersion, downloadInfo.imageTypeUsed);
+
+        try { Files.deleteIfExists(archiveFile); } catch (IOException ignore) { }
+
+        javaBin = findJavaBinary(targetDir);
+        if (javaBin == null || !Files.isRegularFile(javaBin)) {
+            String binaryName = os.equals("windows") ? "java.exe" : "java";
+            throw new IOException("Downloaded Java " + majorVersion + " archive did not contain a valid " + binaryName);
+        }
+        return javaBin.toAbsolutePath().toString();
+    }
+
+    private static class DownloadInfo {
+        final String downloadUrl;
+        final String imageTypeUsed;
+        final String vendorUsed;
+        
+        DownloadInfo(String downloadUrl, String imageTypeUsed, String vendorUsed) {
+            this.downloadUrl = downloadUrl;
+            this.imageTypeUsed = imageTypeUsed;
+            this.vendorUsed = vendorUsed;
+        }
+    }
+
+    private static DownloadInfo resolveDownloadUrl(int majorVersion, String os, String arch, String vendor) throws IOException {
+        String downloadUrl = null;
+        String imageTypeUsed = "jre";
+        String vendorUsed = null;
+        
+        if (vendor != null && vendor.equalsIgnoreCase("graalvm")) {
+            try {
+                downloadUrl = fetchGraalVMDownloadLink(majorVersion, os, arch);
+                if (downloadUrl != null) {
+                    imageTypeUsed = "jdk";
+                    vendorUsed = "graalvm";
+                }
+            } catch (IOException e) {
+                CleanroomRelauncher.LOGGER.warn("Failed to resolve GraalVM JDK {} ({}, {}): {}", majorVersion, os, arch, e.toString());
+            }
+        }
+        
+        if (downloadUrl == null) {
+            try {
+                downloadUrl = fetchAdoptiumDownloadLink(majorVersion, os, arch, "jre");
+                if (downloadUrl != null) {
+                    imageTypeUsed = "jre";
+                    vendorUsed = "temurin";
+                }
+            } catch (IOException e) {
+                CleanroomRelauncher.LOGGER.warn("Failed to resolve Temurin {} JRE via assets API ({}): {}", majorVersion, os, e.toString());
+            }
+            
+            if (downloadUrl == null) {
+                try {
+                    downloadUrl = fetchAdoptiumDownloadLink(majorVersion, os, arch, "jdk");
+                    if (downloadUrl != null) {
+                        imageTypeUsed = "jdk";
+                        vendorUsed = "temurin";
+                    }
+                } catch (IOException e) {
+                    CleanroomRelauncher.LOGGER.warn("Failed to resolve Temurin {} JDK via assets API ({}): {}", majorVersion, os, e.toString());
+                }
+            }
+        }
+        
+        if (downloadUrl == null || vendorUsed == null) {
+            throw new IOException("Unable to resolve Java " + majorVersion + " download URL for " + os + " " + arch + " from vendor(s)");
+        }
+        
+        return new DownloadInfo(downloadUrl, imageTypeUsed, vendorUsed);
+    }
+
+    private static Path findJavaBinary(Path root) throws IOException {
+        if (!Files.isDirectory(root)) return null;
+        try (java.util.stream.Stream<Path> stream = Files.walk(root)) {
+            return stream
+                    .filter(p -> {
+                        String name = p.getFileName().toString();
+                        return name.equals("java") || name.equalsIgnoreCase("java.exe");
+                    })
+                    .filter(p -> p.getParent() != null && p.getParent().getFileName().toString().equalsIgnoreCase("bin"))
+                    .findFirst()
+                    .orElse(null);
+        }
     }
 
     private static void normalizeExtractedRoot(Path targetDir, int majorVersion, String imageType) throws IOException {
@@ -54,268 +208,6 @@ public final class JavaDownloader {
                     }
                 }
             }
-        }
-    }
-
-    private static String detectLinuxArch() {
-        String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
-        if (arch.contains("aarch64") || arch.contains("arm64")) return "aarch64";
-        // common x64 aliases: amd64, x86_64
-        return "x64";
-    }
-
-    private static String detectWindowsArch() {
-        String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
-        if (arch.contains("aarch64") || arch.contains("arm64")) return "aarch64";
-        // common x64 aliases on Windows too
-        return "x64";
-    }
-
-    private static String detectMacArch() {
-        String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
-        if (arch.contains("aarch64") || arch.contains("arm64")) return "aarch64"; // Apple Silicon
-        return "x64"; // Intel Macs
-    }
-
-    public static String ensureWindowsJava(Path baseDir, int majorVersion) throws IOException {
-        return ensureWindowsJava(baseDir, majorVersion, "adoptium", null);
-    }
-
-    public static String ensureWindowsJava(Path baseDir, int majorVersion, ProgressListener progressListener) throws IOException {
-        return ensureWindowsJava(baseDir, majorVersion, "adoptium", progressListener);
-    }
-
-    public static String ensureWindowsJava(Path baseDir, int majorVersion, String vendor, ProgressListener progressListener) throws IOException {
-        if (majorVersion <= 0) majorVersion = 21;
-        String arch = detectWindowsArch();
-        Path temDir = baseDir.resolve(String.format("temurin-%d-windows-%s", majorVersion, arch));
-        Path graDir = baseDir.resolve(String.format("graalvm-%d-windows-%s", majorVersion, arch));
-        boolean wantGraal = vendor != null && vendor.equalsIgnoreCase("graalvm");
-        Path javaExe = wantGraal ? findJavaBinary(graDir) : findJavaBinary(temDir);
-        if (javaExe != null && Files.isRegularFile(javaExe)) return javaExe.toAbsolutePath().toString();
-
-        String downloadUrl = null;
-        String imageTypeUsed = "jre";
-        String vendorUsed = null;
-        if (vendor != null && vendor.equalsIgnoreCase("graalvm")) {
-            try {
-                downloadUrl = fetchGraalVMDownloadLink(majorVersion, "windows", arch);
-                if (downloadUrl != null) {
-                    imageTypeUsed = "jdk";
-                    vendorUsed = "graalvm";
-                }
-            } catch (IOException e) {
-                CleanroomRelauncher.LOGGER.warn("Failed to resolve GraalVM JDK {} (windows, {}): {}", majorVersion, arch, e.toString());
-            }
-        }
-        if (downloadUrl == null) {
-            try {
-                downloadUrl = fetchAdoptiumDownloadLink(majorVersion, "windows", arch, "jre");
-                if (downloadUrl != null) {
-                    imageTypeUsed = "jre";
-                    vendorUsed = "temurin";
-                }
-            } catch (IOException e) {
-                CleanroomRelauncher.LOGGER.warn("Failed to resolve Temurin {} JRE via assets API: {}", majorVersion, e.toString());
-            }
-            if (downloadUrl == null) {
-                try {
-                    downloadUrl = fetchAdoptiumDownloadLink(majorVersion, "windows", arch, "jdk");
-                    if (downloadUrl != null) {
-                        imageTypeUsed = "jdk";
-                        vendorUsed = "temurin";
-                    }
-                } catch (IOException e) {
-                    CleanroomRelauncher.LOGGER.warn("Failed to resolve Temurin {} JDK via assets API: {}", majorVersion, e.toString());
-                }
-            }
-        }
-        if (downloadUrl == null || vendorUsed == null) {
-            throw new IOException("Unable to resolve Java " + majorVersion + " download URL for Windows " + arch + " from vendor(s)");
-        }
-
-        String vendorSlug = vendorUsed;
-        Path targetDir = baseDir.resolve(String.format("%s-%d-windows-%s", vendorSlug, majorVersion, arch));
-        Files.createDirectories(targetDir);
-        Path zipFile = baseDir.resolve(String.format("%s-%d-windows-%s.zip", vendorSlug, majorVersion, arch));
-
-        downloadWithRetries(downloadUrl, zipFile, progressListener, 3);
-
-        extractZip(zipFile, targetDir);
-        normalizeExtractedRoot(targetDir, majorVersion, imageTypeUsed);
-
-        try { Files.deleteIfExists(zipFile); } catch (IOException ignore) { }
-
-        javaExe = findJavaBinary(targetDir);
-        if (javaExe == null || !Files.isRegularFile(javaExe)) {
-            throw new IOException("Downloaded Java " + majorVersion + " archive did not contain a valid java.exe");
-        }
-        return javaExe.toAbsolutePath().toString();
-    }
-
-    public static String ensureLinuxJava(Path baseDir, int majorVersion) throws IOException {
-        return ensureLinuxJava(baseDir, majorVersion, "adoptium", null);
-    }
-
-    public static String ensureLinuxJava(Path baseDir, int majorVersion, ProgressListener progressListener) throws IOException {
-        return ensureLinuxJava(baseDir, majorVersion, "adoptium", progressListener);
-    }
-
-    public static String ensureLinuxJava(Path baseDir, int majorVersion, String vendor, ProgressListener progressListener) throws IOException {
-        if (majorVersion <= 0) majorVersion = 21;
-        String arch = detectLinuxArch();
-        Path temDir = baseDir.resolve(String.format("temurin-%d-linux-%s", majorVersion, arch));
-        Path graDir = baseDir.resolve(String.format("graalvm-%d-linux-%s", majorVersion, arch));
-        boolean wantGraal = vendor != null && vendor.equalsIgnoreCase("graalvm");
-        Path javaBin = wantGraal ? findJavaBinary(graDir) : findJavaBinary(temDir);
-        if (javaBin != null && Files.isRegularFile(javaBin)) return javaBin.toAbsolutePath().toString();
-
-        String downloadUrl = null;
-        String imageTypeUsed = "jre";
-        String vendorUsed = null;
-        if (vendor != null && vendor.equalsIgnoreCase("graalvm")) {
-            try {
-                downloadUrl = fetchGraalVMDownloadLink(majorVersion, "linux", arch);
-                if (downloadUrl != null) {
-                    imageTypeUsed = "jdk";
-                    vendorUsed = "graalvm";
-                }
-            } catch (IOException e) {
-                CleanroomRelauncher.LOGGER.warn("Failed to resolve GraalVM JDK {} (linux, {}): {}", majorVersion, arch, e.toString());
-            }
-        }
-        if (downloadUrl == null) {
-            try {
-                downloadUrl = fetchAdoptiumDownloadLink(majorVersion, "linux", arch, "jre");
-                if (downloadUrl != null) {
-                    imageTypeUsed = "jre";
-                    vendorUsed = "temurin";
-                }
-            } catch (IOException e) {
-                CleanroomRelauncher.LOGGER.warn("Failed to resolve Temurin {} JRE via assets API (linux): {}", majorVersion, e.toString());
-            }
-            if (downloadUrl == null) {
-                try {
-                    downloadUrl = fetchAdoptiumDownloadLink(majorVersion, "linux", arch, "jdk");
-                    if (downloadUrl != null) {
-                        imageTypeUsed = "jdk";
-                        vendorUsed = "temurin";
-                    }
-                } catch (IOException e) {
-                    CleanroomRelauncher.LOGGER.warn("Failed to resolve Temurin {} JDK via assets API (linux): {}", majorVersion, e.toString());
-                }
-            }
-        }
-        if (downloadUrl == null || vendorUsed == null) {
-            throw new IOException("Unable to resolve Java " + majorVersion + " download URL for Linux " + arch + " from vendor(s)");
-        }
-
-        String vendorSlug = vendorUsed;
-        Path targetDir = baseDir.resolve(String.format("%s-%d-linux-%s", vendorSlug, majorVersion, arch));
-        Files.createDirectories(targetDir);
-        Path tarGzFile = baseDir.resolve(String.format("%s-%d-linux-%s.tar.gz", vendorSlug, majorVersion, arch));
-
-        downloadWithRetries(downloadUrl, tarGzFile, progressListener, 3);
-
-        extractTarGz(tarGzFile, targetDir);
-        normalizeExtractedRoot(targetDir, majorVersion, imageTypeUsed);
-
-        try { Files.deleteIfExists(tarGzFile); } catch (IOException ignore) { }
-
-        javaBin = findJavaBinary(targetDir);
-        if (javaBin == null || !Files.isRegularFile(javaBin)) {
-            throw new IOException("Downloaded Java " + majorVersion + " archive did not contain a valid java binary");
-        }
-        return javaBin.toAbsolutePath().toString();
-    }
-
-    public static String ensureMacJava(Path baseDir, int majorVersion) throws IOException {
-        return ensureMacJava(baseDir, majorVersion, "adoptium", null);
-    }
-
-    public static String ensureMacJava(Path baseDir, int majorVersion, ProgressListener progressListener) throws IOException {
-        return ensureMacJava(baseDir, majorVersion, "adoptium", progressListener);
-    }
-
-    public static String ensureMacJava(Path baseDir, int majorVersion, String vendor, ProgressListener progressListener) throws IOException {
-        if (majorVersion <= 0) majorVersion = 21;
-        String arch = detectMacArch();
-        Path temDir = baseDir.resolve(String.format("temurin-%d-mac-%s", majorVersion, arch));
-        Path graDir = baseDir.resolve(String.format("graalvm-%d-mac-%s", majorVersion, arch));
-        boolean wantGraal = vendor != null && vendor.equalsIgnoreCase("graalvm");
-        Path javaBin = wantGraal ? findJavaBinary(graDir) : findJavaBinary(temDir);
-        if (javaBin != null && Files.isRegularFile(javaBin)) return javaBin.toAbsolutePath().toString();
-
-        String downloadUrl = null;
-        String imageTypeUsed = "jre";
-        String vendorUsed = null;
-        if (vendor != null && vendor.equalsIgnoreCase("graalvm")) {
-            try {
-                downloadUrl = fetchGraalVMDownloadLink(majorVersion, "mac", arch);
-                if (downloadUrl != null) {
-                    imageTypeUsed = "jdk";
-                    vendorUsed = "graalvm";
-                }
-            } catch (IOException e) {
-                CleanroomRelauncher.LOGGER.warn("Failed to resolve GraalVM JDK {} (mac, {}): {}", majorVersion, arch, e.toString());
-            }
-        }
-        if (downloadUrl == null) {
-            try {
-                downloadUrl = fetchAdoptiumDownloadLink(majorVersion, "mac", arch, "jre");
-                if (downloadUrl != null) {
-                    imageTypeUsed = "jre";
-                    vendorUsed = "temurin";
-                }
-            } catch (IOException e) {
-                CleanroomRelauncher.LOGGER.warn("Failed to resolve Temurin {} JRE via assets API (mac): {}", majorVersion, e.toString());
-            }
-            if (downloadUrl == null) {
-                try {
-                    downloadUrl = fetchAdoptiumDownloadLink(majorVersion, "mac", arch, "jdk");
-                    if (downloadUrl != null) {
-                        imageTypeUsed = "jdk";
-                        vendorUsed = "temurin";
-                    }
-                } catch (IOException e) {
-                    CleanroomRelauncher.LOGGER.warn("Failed to resolve Temurin {} JDK via assets API (mac): {}", majorVersion, e.toString());
-                }
-            }
-        }
-        if (downloadUrl == null || vendorUsed == null) {
-            throw new IOException("Unable to resolve Java " + majorVersion + " download URL for macOS " + arch + " from vendor(s)");
-        }
-
-        String vendorSlug = vendorUsed;
-        Path targetDir = baseDir.resolve(String.format("%s-%d-mac-%s", vendorSlug, majorVersion, arch));
-        Files.createDirectories(targetDir);
-        Path tarGzFile = baseDir.resolve(String.format("%s-%d-mac-%s.tar.gz", vendorSlug, majorVersion, arch));
-
-        downloadFollowingRedirectsWithUA(downloadUrl, tarGzFile, progressListener);
-
-        extractTarGz(tarGzFile, targetDir);
-        normalizeExtractedRoot(targetDir, majorVersion, imageTypeUsed);
-
-        try { Files.deleteIfExists(tarGzFile); } catch (IOException ignore) { }
-
-        javaBin = findJavaBinary(targetDir);
-        if (javaBin == null || !Files.isRegularFile(javaBin)) {
-            throw new IOException("Downloaded Java " + majorVersion + " archive did not contain a valid java binary");
-        }
-        return javaBin.toAbsolutePath().toString();
-    }
-
-    private static Path findJavaBinary(Path root) throws IOException {
-        if (!Files.isDirectory(root)) return null;
-        try (java.util.stream.Stream<Path> stream = Files.walk(root)) {
-            return stream
-                    .filter(p -> {
-                        String name = p.getFileName().toString();
-                        return name.equals("java") || name.equalsIgnoreCase("java.exe");
-                    })
-                    .filter(p -> p.getParent() != null && p.getParent().getFileName().toString().equalsIgnoreCase("bin"))
-                    .findFirst()
-                    .orElse(null);
         }
     }
 
@@ -389,10 +281,10 @@ public final class JavaDownloader {
         URL url = new URL(api);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("GET");
-        conn.setConnectTimeout(30_000);
-        conn.setReadTimeout(60_000);
+        conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
+        conn.setReadTimeout(READ_TIMEOUT_MS);
         conn.setRequestProperty("Accept", "application/json");
-        conn.setRequestProperty("User-Agent", "Mozilla/5.0 CleanroomRelauncher/1.0");
+        conn.setRequestProperty("User-Agent", USER_AGENT);
         int code = conn.getResponseCode();
         if (code != 200) {
             throw new IOException("Unexpected HTTP status " + code + " from assets API: " + api);
@@ -454,10 +346,10 @@ public final class JavaDownloader {
         URL url = new URL(api);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("GET");
-        conn.setConnectTimeout(30_000);
-        conn.setReadTimeout(60_000);
+        conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
+        conn.setReadTimeout(READ_TIMEOUT_MS);
         conn.setRequestProperty("Accept", "application/json");
-        conn.setRequestProperty("User-Agent", "Mozilla/5.0 CleanroomRelauncher/1.0");
+        conn.setRequestProperty("User-Agent", USER_AGENT);
         int code = conn.getResponseCode();
         if (code != 200) {
             throw new IOException("Unexpected HTTP status " + code + " from GitHub releases API");
@@ -497,35 +389,125 @@ public final class JavaDownloader {
         }
     }
 
-    private static void downloadWithRetries(String urlStr, Path dest, ProgressListener listener, int maxRetries) throws IOException {
-        int attempt = 0;
-        long baseDelayMs = 2_000L;
+    private static void downloadWithVerification(String urlStr, Path dest, ProgressListener listener, int maxRetries) throws IOException {
         IOException last = null;
-        while (attempt <= maxRetries) {
+        for (int attempt = 0; attempt <= maxRetries; attempt++) {
             try {
-                downloadFollowingRedirectsWithUA(urlStr, dest, listener);
-                return;
+                String finalUrl = resolveFinalURL(urlStr);
+                ProbeInfo info = probeServer(finalUrl);
+                boolean canMulti = info.totalBytes > 0 && info.acceptRanges && testRangeSupport(finalUrl);
+                if (canMulti) {
+                    if (listener != null) listener.onStart(info.totalBytes);
+                    downloadMultiChunk(finalUrl, dest, info.totalBytes, listener);
+                } else {
+                    // Fallback to single-stream with resume
+                    downloadFollowingRedirectsWithUA(finalUrl, dest, listener);
+                }
+                // Verify archive integrity; if fails, delete and retry
+                if (!CacheVerification.verifyJavaArchive(dest)) {
+                    CleanroomRelauncher.LOGGER.warn("Archive verification failed for {}. Retrying download...", dest.getFileName().toString());
+                    try { Files.deleteIfExists(dest); } catch (IOException ignore) {}
+                    last = new IOException("Archive verification failed");
+                    continue;
+                }
+                return; // success
             } catch (IOException e) {
                 last = e;
                 if (attempt == maxRetries) break;
-                long backoff = baseDelayMs * (1L << attempt);
+                long backoff = (long) (2000L * Math.pow(2, attempt));
                 long jitter = (long) (backoff * 0.2 * Math.random());
                 long sleep = backoff + jitter;
-                CleanroomRelauncher.LOGGER.warn("Download failed (attempt {}/{}). Retrying in {} ms: {}", attempt + 1, maxRetries + 1, sleep, e.toString());
-                long remaining = sleep;
-                long tick;
-                while (remaining > 0) {
-                    if (listener != null) {
+                if (listener != null) {
+                    long remaining = sleep;
+                    while (remaining > 0) {
                         try { listener.onRetryScheduled(attempt + 1, maxRetries + 1, remaining); } catch (Throwable ignored) {}
+                        long tick = Math.min(1000L, remaining);
+                        try { Thread.sleep(tick); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                        remaining -= tick;
                     }
-                    tick = Math.min(1000L, remaining);
-                    try { Thread.sleep(tick); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
-                    remaining -= tick;
+                } else {
+                    try { Thread.sleep(sleep); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
                 }
-                attempt++;
             }
         }
-        throw last != null ? last : new IOException("Download failed after retries: " + urlStr);
+        throw last != null ? last : new IOException("Download failed after verification retries: " + urlStr);
+    }
+
+    private static class ProbeInfo {
+        final long totalBytes; final boolean acceptRanges; final String finalUrl;
+        ProbeInfo(long t, boolean a, String u) { totalBytes = t; acceptRanges = a; finalUrl = u; }
+    }
+
+    private static String resolveFinalURL(String urlStr) throws IOException {
+        String current = urlStr;
+        for (int i = 0; i < REDIRECT_LIMIT; i++) {
+            HttpURLConnection conn = null;
+            try {
+                URL url = new URL(current);
+                conn = (HttpURLConnection) url.openConnection();
+                conn.setInstanceFollowRedirects(false);
+                conn.setRequestMethod("HEAD");
+                conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
+                conn.setReadTimeout(CONNECT_TIMEOUT_MS);
+                conn.setRequestProperty("User-Agent", USER_AGENT);
+                int code = conn.getResponseCode();
+                if (code >= 300 && code < 400) {
+                    String location = conn.getHeaderField("Location");
+                    if (location == null) throw new IOException("Redirect without Location header from " + current);
+                    current = location;
+                    continue;
+                }
+                return current;
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
+        }
+        throw new IOException("Too many redirects while resolving: " + urlStr);
+    }
+
+    private static ProbeInfo probeServer(String urlStr) throws IOException {
+        HttpURLConnection conn = null;
+        try {
+            URL url = new URL(urlStr);
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("HEAD");
+            conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
+            conn.setReadTimeout(CONNECT_TIMEOUT_MS);
+            conn.setRequestProperty("User-Agent", USER_AGENT);
+            int code = conn.getResponseCode();
+            if (code >= 300 && code < 400) {
+                String fin = resolveFinalURL(urlStr);
+                return probeServer(fin);
+            }
+            long total = -1L;
+            try { total = Long.parseLong(conn.getHeaderField("Content-Length")); } catch (Exception ignore) { total = -1L; }
+            boolean ranges = false;
+            String ar = conn.getHeaderField("Accept-Ranges");
+            if (ar != null && ar.toLowerCase(Locale.ROOT).contains("bytes")) ranges = true;
+            return new ProbeInfo(total, ranges, urlStr);
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    private static boolean testRangeSupport(String urlStr) {
+        HttpURLConnection conn = null;
+        try {
+            URL url = new URL(urlStr);
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(TEST_RANGE_TIMEOUT_MS);
+            conn.setReadTimeout(TEST_RANGE_TIMEOUT_MS);
+            conn.setRequestProperty("User-Agent", USER_AGENT);
+            conn.setRequestProperty("Accept", "application/octet-stream");
+            conn.setRequestProperty("Range", "bytes=0-0");
+            int code = conn.getResponseCode();
+            return code == 206;
+        } catch (IOException ignored) {
+            return false;
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
     }
 
     private static void downloadFollowingRedirectsWithUA(String urlStr, Path dest, ProgressListener listener) throws IOException {
@@ -535,72 +517,262 @@ public final class JavaDownloader {
             Files.createDirectories(temp.getParent());
             Files.createFile(temp);
         }
-        for (int i = 0; i < 7; i++) { // follow up to 7 redirects
+
+        for (int i = 0; i < REDIRECT_LIMIT; i++) {
             long existing = 0L;
             try { existing = Files.size(temp); } catch (IOException ignore) { existing = 0L; }
-            URL url = new URL(current);
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-            conn.setInstanceFollowRedirects(false);
-            conn.setRequestMethod("GET");
-            conn.setConnectTimeout(30_000);
-            conn.setReadTimeout(120_000);
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) CleanroomRelauncher/1.0");
-            conn.setRequestProperty("Accept", "application/octet-stream");
-            if (existing > 0) {
-                conn.setRequestProperty("Range", "bytes=" + existing + "-");
-            }
-            int code = conn.getResponseCode();
-            if (code >= 300 && code < 400) {
-                String location = conn.getHeaderField("Location");
-                if (location == null) throw new IOException("Redirect without Location header from " + current);
-                current = location;
-                continue;
-            }
-            if (code == 206 || code == 200) {
-                long total = -1L;
-                if (code == 206) {
-                    String cr = conn.getHeaderField("Content-Range");
-                    // format: bytes <start>-<end>/<total>
-                    if (cr != null && cr.startsWith("bytes ")) {
-                        int slash = cr.indexOf('/');
-                        if (slash > 0 && slash + 1 < cr.length()) {
-                            try { total = Long.parseLong(cr.substring(slash + 1).trim()); } catch (Exception ignore) { total = -1L; }
+            HttpURLConnection conn = null;
+            try {
+                URL url = new URL(current);
+                conn = (HttpURLConnection) url.openConnection();
+                conn.setInstanceFollowRedirects(false);
+                conn.setRequestMethod("GET");
+                conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
+                conn.setReadTimeout(READ_TIMEOUT_MS);
+                conn.setRequestProperty("User-Agent", USER_AGENT);
+                conn.setRequestProperty("Accept", "application/octet-stream");
+                if (existing > 0) {
+                    conn.setRequestProperty("Range", "bytes=" + existing + "-");
+                }
+                int code = conn.getResponseCode();
+                if (code >= 300 && code < 400) {
+                    String location = conn.getHeaderField("Location");
+                    if (location == null) throw new IOException("Redirect without Location header from " + current);
+                    current = location;
+                    continue;
+                }
+                if (code == 206 || code == 200) {
+                    long total = -1L;
+                    if (code == 206) {
+                        String cr = conn.getHeaderField("Content-Range");
+                        if (cr != null && cr.startsWith("bytes ")) {
+                            int slash = cr.indexOf('/');
+                            if (slash > 0 && slash + 1 < cr.length()) {
+                                try { total = Long.parseLong(cr.substring(slash + 1).trim()); } catch (Exception ignore) { total = -1L; }
+                            }
+                        }
+                        if (total <= 0) {
+                            long remaining = -1L;
+                            try { remaining = Long.parseLong(conn.getHeaderField("Content-Length")); } catch (Exception ignore) { remaining = -1L; }
+                            if (remaining > 0) total = remaining + existing; else total = -1L;
+                        }
+                    } else {
+                        try { total = Long.parseLong(conn.getHeaderField("Content-Length")); } catch (Exception ignore) { total = -1L; }
+                        existing = 0L;
+                    }
+                    if (listener != null) listener.onStart(total);
+                    try (InputStream in = new BufferedInputStream(conn.getInputStream());
+                         OutputStream out = Files.newOutputStream(temp, StandardOpenOption.CREATE, existing > 0 ? StandardOpenOption.APPEND : StandardOpenOption.TRUNCATE_EXISTING)) {
+                        byte[] buf = new byte[8192];
+                        long downloaded = existing;
+                        int n;
+                        while ((n = in.read(buf)) >= 0) {
+                            out.write(buf, 0, n);
+                            downloaded += n;
+                            if (listener != null) listener.onProgress(downloaded, total);
                         }
                     }
-                    if (total <= 0) {
-                        // fallback to remaining length + existing
-                        long remaining = -1L;
-                        try { remaining = Long.parseLong(conn.getHeaderField("Content-Length")); } catch (Exception ignore) { remaining = -1L; }
-                        if (remaining > 0) total = remaining + existing; else total = -1L;
+                    try {
+                        Files.move(temp, dest, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+                    } catch (AtomicMoveNotSupportedException e) {
+                        Files.move(temp, dest, StandardCopyOption.REPLACE_EXISTING);
                     }
-                } else { // 200
-                    try { total = Long.parseLong(conn.getHeaderField("Content-Length")); } catch (Exception ignore) { total = -1L; }
-                    // server ignored range; reset existing
-                    existing = 0L;
+                    CleanroomRelauncher.LOGGER.info("Downloaded Java from {}", current);
+                    return;
                 }
-                if (listener != null) listener.onStart(total);
-                try (InputStream in = new BufferedInputStream(conn.getInputStream());
-                     OutputStream out = Files.newOutputStream(temp, StandardOpenOption.CREATE, existing > 0 ? StandardOpenOption.APPEND : StandardOpenOption.TRUNCATE_EXISTING)) {
-                    byte[] buf = new byte[8192];
-                    long downloaded = existing;
-                    int n;
-                    while ((n = in.read(buf)) >= 0) {
-                        out.write(buf, 0, n);
-                        downloaded += n;
-                        if (listener != null) listener.onProgress(downloaded, total);
-                    }
-                }
-                // Move into place
-                try {
-                    Files.move(temp, dest, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-                } catch (AtomicMoveNotSupportedException e) {
-                    Files.move(temp, dest, StandardCopyOption.REPLACE_EXISTING);
-                }
-                CleanroomRelauncher.LOGGER.info("Downloaded Java from {}", current);
-                return;
+                throw new IOException("Unexpected HTTP status " + code + " from " + current);
+            } finally {
+                if (conn != null) conn.disconnect();
             }
-            throw new IOException("Unexpected HTTP status " + code + " from " + current);
         }
         throw new IOException("Too many redirects while downloading: " + urlStr);
+    }
+
+    // Multi-chunk download with post-download verification and automatic retry.
+    private static void downloadMultiChunk(String urlStr, Path dest, long totalBytes, ProgressListener listener) throws IOException {
+        int cores = Math.max(1, Runtime.getRuntime().availableProcessors());
+        int threads = Math.min(8, cores * 2);
+        int totalChunks = (int) ((totalBytes + CHUNK_SIZE - 1) / CHUNK_SIZE);
+
+        Path temp = dest.resolveSibling(dest.getFileName().toString() + ".part");
+        Path metaFile = dest.resolveSibling(dest.getFileName().toString() + ".part.meta");
+        Files.createDirectories(dest.getParent());
+
+        BitSet completedChunks = new BitSet(totalChunks);
+        long alreadyDownloaded = 0L;
+
+        if (Files.exists(temp) && Files.exists(metaFile)) {
+            try {
+                Properties meta = new Properties();
+                try (InputStream mis = Files.newInputStream(metaFile)) {
+                    meta.load(mis);
+                }
+                long savedTotal = Long.parseLong(meta.getProperty("totalBytes", "0"));
+                int savedChunks = Integer.parseInt(meta.getProperty("totalChunks", "0"));
+                if (savedTotal == totalBytes && savedChunks == totalChunks) {
+                    String chunksHex = meta.getProperty("completedChunks", "");
+                    if (!chunksHex.isEmpty()) {
+                        byte[] chunkBytes = hexToBytes(chunksHex);
+                        completedChunks = BitSet.valueOf(chunkBytes);
+                        for (int i = 0; i < totalChunks; i++) {
+                            if (completedChunks.get(i)) {
+                                long start = (long) i * CHUNK_SIZE;
+                                long end = Math.min(totalBytes - 1, (i + 1) * CHUNK_SIZE - 1);
+                                alreadyDownloaded += (end - start + 1);
+                            }
+                        }
+                        CleanroomRelauncher.LOGGER.info("Resuming multi-chunk download: {} of {} chunks completed, {} bytes already downloaded",
+                                completedChunks.cardinality(), totalChunks, alreadyDownloaded);
+                    }
+                } else {
+                    CleanroomRelauncher.LOGGER.warn("Metadata mismatch for {}. Starting fresh download.", dest.getFileName().toString());
+                    completedChunks.clear();
+                    alreadyDownloaded = 0L;
+                }
+            } catch (Exception e) {
+                CleanroomRelauncher.LOGGER.warn("Failed to read download metadata: {}. Starting fresh.", e.toString());
+                completedChunks.clear();
+                alreadyDownloaded = 0L;
+            }
+        }
+
+        if (!Files.exists(temp)) {
+            try (RandomAccessFile raf = new RandomAccessFile(temp.toFile(), "rw")) {
+                raf.setLength(totalBytes);
+            }
+        }
+
+        final BitSet[] completedChunksRef = {completedChunks};
+        final long finalTotalBytes = totalBytes;
+        final int finalTotalChunks = totalChunks;
+        final Path finalMetaFile = metaFile;
+
+        AtomicLong downloaded = new AtomicLong(alreadyDownloaded);
+        AtomicBoolean failed = new AtomicBoolean(false);
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        List<Future<?>> futures = new ArrayList<>();
+
+        for (int i = 0; i < totalChunks; i++) {
+            if (completedChunks.get(i)) {
+                continue;
+            }
+            final int chunkIndex = i;
+            final long start = (long) i * CHUNK_SIZE;
+            final long end = Math.min(totalBytes - 1, (i + 1) * CHUNK_SIZE - 1);
+            futures.add(pool.submit((Callable<Void>) () -> {
+                int attempt = 0;
+                IOException last = null;
+                while (attempt < CHUNK_RETRY_ATTEMPTS && !failed.get()) {
+                    HttpURLConnection conn = null;
+                    try {
+                        URL url = new URL(urlStr);
+                        conn = (HttpURLConnection) url.openConnection();
+                        conn.setRequestMethod("GET");
+                        conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
+                        conn.setReadTimeout(CHUNK_TIMEOUT_MINUTES * 60_000);
+                        conn.setRequestProperty("User-Agent", USER_AGENT);
+                        conn.setRequestProperty("Accept", "application/octet-stream");
+                        conn.setRequestProperty("Range", "bytes=" + start + "-" + end);
+                        int code = conn.getResponseCode();
+                        if (code != 206 && code != 200) throw new IOException("Unexpected HTTP " + code + " for range " + start + "-" + end);
+                        try (InputStream in = new BufferedInputStream(conn.getInputStream());
+                             RandomAccessFile raf = new RandomAccessFile(temp.toFile(), "rw")) {
+                            raf.seek(start);
+                            byte[] buf = new byte[8192];
+                            long toRead = (end - start + 1);
+                            while (toRead > 0) {
+                                int n = in.read(buf, 0, (int) Math.min(buf.length, toRead));
+                                if (n < 0) break;
+                                raf.write(buf, 0, n);
+                                toRead -= n;
+                                long cur = downloaded.addAndGet(n);
+                                if (listener != null) {
+                                    try { listener.onProgress(cur, finalTotalBytes); } catch (Throwable ignored) {}
+                                }
+                                if (failed.get()) break;
+                            }
+                            if (toRead > 0 && !failed.get()) throw new IOException("Early EOF for chunk " + start + "-" + end);
+                        }
+                        synchronized (completedChunksRef) {
+                            completedChunksRef[0].set(chunkIndex);
+                            saveMetadata(finalMetaFile, finalTotalBytes, finalTotalChunks, completedChunksRef[0]);
+                        }
+                        return null;
+                    } catch (IOException e) {
+                        last = e;
+                        attempt++;
+                        try { Thread.sleep(500L * attempt); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                    } finally {
+                        if (conn != null) conn.disconnect();
+                    }
+                }
+                failed.set(true);
+                throw last != null ? last : new IOException("Failed to download chunk " + start + "-" + end);
+            }));
+        }
+
+        pool.shutdown();
+        for (Future<?> f : futures) {
+            try {
+                f.get(CHUNK_TIMEOUT_MINUTES, TimeUnit.MINUTES);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                failed.set(true);
+                pool.shutdownNow();
+                throw new IOException("Interrupted while downloading", e);
+            } catch (ExecutionException e) {
+                failed.set(true);
+                pool.shutdownNow();
+                throw new IOException("Chunk task failed", e.getCause());
+            } catch (TimeoutException e) {
+                failed.set(true);
+                pool.shutdownNow();
+                throw new IOException("Timed out waiting for chunk", e);
+            }
+        }
+
+        if (failed.get()) {
+            throw new IOException("Multi-chunk download failed");
+        }
+
+        try {
+            Files.move(temp, dest, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException e) {
+            Files.move(temp, dest, StandardCopyOption.REPLACE_EXISTING);
+        }
+        try { Files.deleteIfExists(metaFile); } catch (IOException ignore) {}
+        CleanroomRelauncher.LOGGER.info("Downloaded (multi-chunk) Java from {}", urlStr);
+    }
+
+    private static void saveMetadata(Path metaFile, long totalBytes, int totalChunks, BitSet completedChunks) {
+        try {
+            Properties meta = new Properties();
+            meta.setProperty("totalBytes", String.valueOf(totalBytes));
+            meta.setProperty("totalChunks", String.valueOf(totalChunks));
+            byte[] chunkBytes = completedChunks.toByteArray();
+            meta.setProperty("completedChunks", bytesToHex(chunkBytes));
+            try (OutputStream out = Files.newOutputStream(metaFile, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
+                meta.store(out, "Multi-chunk download metadata");
+            }
+        } catch (IOException e) {
+            CleanroomRelauncher.LOGGER.warn("Failed to save download metadata: {}", e.toString());
+        }
+    }
+
+    private static String bytesToHex(byte[] bytes) {
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) {
+            sb.append(String.format("%02x", b & 0xff));
+        }
+        return sb.toString();
+    }
+
+    private static byte[] hexToBytes(String hex) {
+        int len = hex.length();
+        byte[] data = new byte[len / 2];
+        for (int i = 0; i < len; i += 2) {
+            data[i / 2] = (byte) ((Character.digit(hex.charAt(i), 16) << 4) + Character.digit(hex.charAt(i + 1), 16));
+        }
+        return data;
     }
 }
