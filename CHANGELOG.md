@@ -2,7 +2,7 @@
 
 ## [0.3.2] - 2025-10-04
 
-#### TLDR:
+### TLDR:
 Faster more reliable downloads, auto-update, and auto-cleanup.
 
 ### Added
