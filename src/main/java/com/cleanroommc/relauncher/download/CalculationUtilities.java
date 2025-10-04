@@ -31,12 +31,12 @@ public final class CalculationUtilities {
         private double smoothedETA = -1.0;
         private static final double ETA_SMOOTHING_ALPHA = 0.05; // Lower = smoother (0.0 to 1.0)
 
-        public void reset() {
+        public synchronized void reset() {
             samples.clear();
             smoothedETA = -1.0;
         }
 
-        public double calculateSpeed(long downloadedBytes) {
+        public synchronized double calculateSpeed(long downloadedBytes) {
             long nowNs = System.nanoTime();
             samples.add(new long[]{nowNs, downloadedBytes});
 
@@ -56,7 +56,7 @@ public final class CalculationUtilities {
             return 0.0;
         }
 
-        public long calculateSmoothedETA(long totalBytes, long downloadedBytes, double speed) {
+        public synchronized long calculateSmoothedETA(long totalBytes, long downloadedBytes, double speed) {
             if (speed <= 0) return -1;
             long remaining = Math.max(0L, totalBytes - downloadedBytes);
             double rawETA = remaining / speed;
