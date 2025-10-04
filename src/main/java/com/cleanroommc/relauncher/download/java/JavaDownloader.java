@@ -38,7 +38,8 @@ import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
 
 public final class JavaDownloader {
 
-    private static final int DEFAULT_JAVA_VERSION = 21;
+    public static final int MINIMUM_JAVA_VERSION = 21;
+    public static final int DEFAULT_JAVA_VERSION = 24;
     private static final int MAX_DOWNLOAD_RETRIES = 3;
     private static final long CHUNK_SIZE = 4L * 1024L * 1024L; // 4 MiB
     private static final int CHUNK_TIMEOUT_MINUTES = 10;

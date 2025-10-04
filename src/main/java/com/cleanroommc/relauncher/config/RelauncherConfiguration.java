@@ -1,6 +1,7 @@
 package com.cleanroommc.relauncher.config;
 
 import com.cleanroommc.relauncher.CleanroomRelauncher;
+import com.cleanroommc.relauncher.download.java.JavaDownloader;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.annotations.SerializedName;
@@ -38,7 +39,7 @@ public class RelauncherConfiguration {
     @SerializedName("args")
     private String javaArguments = "";
     @SerializedName("javaVersion")
-    private int javaVersion = 21;
+    private int javaVersion = JavaDownloader.DEFAULT_JAVA_VERSION;
     @SerializedName("javaVendor")
     private String javaVendor = "adoptium";
     @SerializedName("darkMode")
@@ -63,7 +64,7 @@ public class RelauncherConfiguration {
     }
 
     public int getJavaVersion() {
-        return javaVersion <= 0 ? 21 : javaVersion;
+        return javaVersion <= 0 ? JavaDownloader.DEFAULT_JAVA_VERSION : javaVersion;
     }
 
     public String getJavaVendor() {
@@ -135,7 +136,7 @@ public class RelauncherConfiguration {
             writer.write("  \"javaVendor\": \"" + escapeJson(getJavaVendor()) + "\"," + nl);
 
             // javaVersion
-            writer.write("  // Java major version to use (e.g., 21). Changing this triggers auto re-download and switch." + nl);
+            writer.write("  // Java major version to use (e.g., " + JavaDownloader.DEFAULT_JAVA_VERSION + "). Changing this triggers auto re-download and switch." + nl);
             writer.write("  \"javaVersion\": " + getJavaVersion() + "," + nl);
 
             // darkMode
