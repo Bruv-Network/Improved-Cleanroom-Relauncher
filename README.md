@@ -15,7 +15,7 @@ Features
     - Real-time download speed and ETA tracking
     - Automatic retry with exponential backoff
     - Intelligent chunk-level resume after interruption
-    - File integrity verification (SHA-256 for Java archives)
+    - File integrity verification
 - **Automatic Java download and setup**
     - Configurable major version (default: 24, minimum: 21)
     - Configurable distribution (default: Adoptium, alternative: GraalVM)
