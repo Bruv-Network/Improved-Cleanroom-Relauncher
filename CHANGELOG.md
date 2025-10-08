@@ -5,7 +5,7 @@
 ### Fixed
 - MacOS Architecture Detection
 
-(Should auto-download the correct version if the wrong version was downloaded)
+(Delete config to download the correct version)
 
 ## Upstream Changes
 ### Added
