@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.4] - 2025-10-08
+## Hotfix
+### Added
+- Architecture Validation
+(If your configured architecture and system architecture differ, it will auto download the correct java architecture. This was mainly added to easily fix the previous issue)
+
 ## [0.3.3] - 2025-10-08
 
 ### Fixed
