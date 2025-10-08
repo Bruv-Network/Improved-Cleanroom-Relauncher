@@ -59,6 +59,26 @@ public final class JavaDownloader {
     }
 
     private static String detectArch() {
+        String osName = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+        
+        if (osName.contains("mac")) {
+            try {
+                Process process = Runtime.getRuntime().exec(new String[]{"uname", "-m"});
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                    String line = reader.readLine();
+                    if (line != null) {
+                        line = line.trim().toLowerCase(Locale.ROOT);
+                        if (line.equals("arm64") || line.equals("aarch64")) {
+                            return "aarch64";
+                        }
+                    }
+                }
+                process.waitFor();
+            } catch (Exception e) {
+                CleanroomRelauncher.LOGGER.warn("Failed to detect Mac architecture via uname, falling back to os.arch: {}", e.toString());
+            }
+        }
+        
         String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
         return (arch.contains("aarch64") || arch.contains("arm64")) ? "aarch64" : "x64";
     }
