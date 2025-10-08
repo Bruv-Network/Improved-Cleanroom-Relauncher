@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.3.3] - 2025-10-08
+
+### Fixed
+- MacOS Architecture Detection
+
+(Should auto-download the correct version if the wrong version was downloaded)
+
+## Upstream Changes
+### Added
+- Respect the launcher's original heap space setting arguments (-Xms, -Xmx) if none is specified in the configuration
+
+### Fixed
+- Compatibility with newer MMC pack formats (starting from Cleanroom 0.3.19)
+- Encode and decode configuration with UTF-8
+- Some Linux installs not being detected properly (updated JavaUtils to 1.1.3)
+
+### Changed
+- Thanks to @ZZZank, using MethodHandles to call the wrapper class's main method instead of standard reflection, allows for a cleaner stacktrace
+
 ## [0.3.2] - 2025-10-04
 
 ### TLDR:
