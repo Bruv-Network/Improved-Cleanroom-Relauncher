@@ -7,18 +7,25 @@ import java.awt.*;
 import java.awt.event.*;
 
 public final class SetupProgressDialog {
-    private final JDialog dialog;
+    private final JFrame frame;
     private final JProgressBar progressBar;
     private final JLabel messageLabel;
 
-    private SetupProgressDialog(JFrame owner, String title) {
+    private SetupProgressDialog(String title) {
         boolean dark = CleanroomRelauncher.CONFIG != null && CleanroomRelauncher.CONFIG.isDarkMode();
-        dialog = new JDialog(owner, title, false);
-        if (dark) dialog.setUndecorated(true);
-        dialog.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
-        dialog.setSize(500, 120);
-        dialog.setResizable(false);
-        dialog.setLocationRelativeTo(null);
+        frame = new JFrame(title);
+        
+        // Set icon
+        try {
+            ImageIcon icon = new ImageIcon(Toolkit.getDefaultToolkit().getImage(SetupProgressDialog.class.getResource("/cleanroom-relauncher.png")));
+            frame.setIconImage(icon.getImage());
+        } catch (Exception ignored) {}
+        
+        if (dark) frame.setUndecorated(true);
+        frame.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
+        frame.setSize(500, 120);
+        frame.setResizable(false);
+        frame.setLocationRelativeTo(null);
 
         JPanel panel = new JPanel(new BorderLayout(10, 10));
         panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
@@ -33,13 +40,13 @@ public final class SetupProgressDialog {
 
         if (dark) {
             JPanel outer = new JPanel(new BorderLayout());
-            JPanel header = buildDarkHeader(title, dialog);
+            JPanel header = buildDarkHeader(title, frame);
             outer.add(header, BorderLayout.NORTH);
             outer.add(panel, BorderLayout.CENTER);
-            dialog.setContentPane(outer);
+            frame.setContentPane(outer);
             applyDark(outer);
         } else {
-            dialog.setContentPane(panel);
+            frame.setContentPane(panel);
         }
     }
 
@@ -47,16 +54,19 @@ public final class SetupProgressDialog {
         final SetupProgressDialog[] holder = new SetupProgressDialog[1];
         try {
             SwingUtilities.invokeAndWait(() -> {
-                holder[0] = new SetupProgressDialog(null, title);
-                holder[0].dialog.setVisible(true);
+                holder[0] = new SetupProgressDialog(title);
+                holder[0].frame.setVisible(true);
             });
         } catch (Exception ignored) {}
         return holder[0];
     }
 
     public void close() {
-        if (dialog == null) return;
-        SwingUtilities.invokeLater(() -> dialog.setVisible(false));
+        if (frame == null) return;
+        SwingUtilities.invokeLater(() -> {
+            frame.setVisible(false);
+            frame.dispose();
+        });
     }
 
     public void setMessage(String msg) {
@@ -125,7 +135,7 @@ public final class SetupProgressDialog {
         }
     }
 
-    private static JPanel buildDarkHeader(String title, JDialog dialog) {
+    private static JPanel buildDarkHeader(String title, JFrame frame) {
         Color bg = new Color(0x2d2d2d);
         Color fg = new Color(0xe0e0e0);
         JPanel header = new JPanel(new BorderLayout());
@@ -147,7 +157,7 @@ public final class SetupProgressDialog {
             public void mouseDragged(MouseEvent e) {
                 if (drag[0] != null) {
                     Point p = e.getLocationOnScreen();
-                    dialog.setLocation(p.x - drag[0].x, p.y - drag[0].y);
+                    frame.setLocation(p.x - drag[0].x, p.y - drag[0].y);
                 }
             }
         });

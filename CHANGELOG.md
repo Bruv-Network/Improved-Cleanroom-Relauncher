@@ -1,6 +1,29 @@
 # Changelog
 
-### [0.3.1] - 2025-09-13
+## [0.3.2] - 2025-10-04
+
+### TLDR:
+Faster more reliable downloads, auto-update, and auto-cleanup.
+
+### Added
+- Multi-chunk parallel Java downloads
+- Multi-file parallel library downloads
+- Better download speed and ETA tracking for all downloads
+- Better download resuming and retrying
+- Java download verification
+- Auto-Update
+- Automatic cleanup of unused temp setup files
+- Taskbar icon during download
+
+### Fixed
+- Library progress not showing
+
+### Changed
+- Default Java version from 21 to 24
+
+## [0.3.1] - 2025-09-13
+
+### Added
 - GraalVM support
 - Dark mode
 - Download Speed and ETA

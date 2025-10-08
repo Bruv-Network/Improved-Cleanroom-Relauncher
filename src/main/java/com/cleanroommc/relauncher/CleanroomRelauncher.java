@@ -4,12 +4,13 @@ import com.cleanroommc.javautils.JavaUtils;
 import com.cleanroommc.javautils.api.JavaVersion;
 import com.cleanroommc.relauncher.config.RelauncherConfiguration;
 import com.cleanroommc.relauncher.download.CleanroomRelease;
+import com.cleanroommc.relauncher.download.GlobalDownloader;
 import com.cleanroommc.relauncher.download.cache.CleanroomCache;
+import com.cleanroommc.relauncher.download.java.JavaDownloader;
 import com.cleanroommc.relauncher.download.schema.Version;
 import com.cleanroommc.relauncher.gui.RelauncherGUI;
-import com.cleanroommc.relauncher.download.java.JavaDownloader;
-import com.cleanroommc.relauncher.download.GlobalDownloader;
 import com.cleanroommc.relauncher.gui.SetupProgressDialog;
+import com.cleanroommc.relauncher.download.CalculationUtilities;
 import com.google.gson.Gson;
 import net.minecraft.launchwrapper.Launch;
 import net.minecraftforge.fml.cleanroomrelauncher.ExitVMBypass;
@@ -60,29 +61,20 @@ public class CleanroomRelauncher {
             Pattern pat = Pattern.compile("(temurin|graalvm)-(\\d+)-(windows|linux|mac)-(x64|aarch64)", Pattern.CASE_INSENSITIVE);
             Matcher m = pat.matcher(normalized);
             if (m.find()) {
-                return m.group(1).toLowerCase(Locale.ROOT);
+                return normalizeVendorName(m.group(1).toLowerCase(Locale.ROOT));
             }
         } catch (Throwable ignored) {
         }
         return null;
     }
 
-    private static String formatSpeed(double bytesPerSec) {
-        if (bytesPerSec <= 0) return "0 B/s";
-        final String[] units = {"B/s", "KB/s", "MB/s", "GB/s"};
-        int idx = 0;
-        double v = bytesPerSec;
-        while (v >= 1024.0 && idx < units.length - 1) { v /= 1024.0; idx++; }
-        return String.format(Locale.ROOT, "%.1f %s", v, units[idx]);
-    }
-
-    private static String formatETA(long seconds) {
-        if (seconds < 0) return "--:--";
-        long h = seconds / 3600;
-        long m = (seconds % 3600) / 60;
-        long s = seconds % 60;
-        if (h > 0) return String.format(Locale.ROOT, "%d:%02d:%02d", h, m, s);
-        return String.format(Locale.ROOT, "%02d:%02d", m, s);
+    private static String normalizeVendorName(String vendor) {
+        if (vendor == null || vendor.isEmpty()) return "adoptium";
+        String lower = vendor.toLowerCase(Locale.ROOT);
+        if (lower.equals("temurin") || lower.equals("adoptium")) {
+            return "adoptium";
+        }
+        return lower;
     }
 
     private static boolean isCleanroom() {
@@ -198,8 +190,12 @@ public class CleanroomRelauncher {
         String notedLatestVersion = CONFIG.getLatestCleanroomVersion();
         String javaPath = CONFIG.getJavaExecutablePath();
         String javaArgs = CONFIG.getJavaArguments();
+        boolean autoUpdate = CONFIG.isAutoUpdate();
         boolean needsNotifyLatest = notedLatestVersion == null || !notedLatestVersion.equals(latestRelease.name);
-        if (selectedVersion != null) {
+        if (autoUpdate) {
+            selected = latestRelease;
+            needsNotifyLatest = false;
+        } else if (selectedVersion != null) {
             selected = releases.stream().filter(cr -> cr.name.equals(selectedVersion)).findFirst().orElse(null);
         }
         if (javaPath != null && !new File(javaPath).isFile()) {
@@ -213,13 +209,13 @@ public class CleanroomRelauncher {
         AtomicReference<SetupProgressDialog> setupDialogRef = new AtomicReference<>(null);
         // Determine desired Java version from config and auto-switch if current path differs
         int desiredJava = CONFIG.getJavaVersion();
-        String desiredVendor = CONFIG.getJavaVendor();
+        String desiredVendor = normalizeVendorName(CONFIG.getJavaVendor());
         Integer currentJavaFromPath = extractTemurinMajorFromPath(javaPath);
         if (javaPath != null && (currentJavaFromPath == null || currentJavaFromPath.intValue() != desiredJava)) {
             LOGGER.info("Configured Java version {} differs from current Java path ({}). Switching to {} {}...", desiredJava, javaPath, desiredVendor, desiredJava);
             javaPath = null; // trigger auto-setup to fetch the desired Java version
         }
-        String currentVendorFromPath = extractVendorFromPath(javaPath);
+        String currentVendorFromPath = normalizeVendorName(extractVendorFromPath(javaPath));
         if (javaPath != null && currentVendorFromPath != null && !currentVendorFromPath.equalsIgnoreCase(desiredVendor)) {
             LOGGER.info("Configured Java vendor '{}' differs from current vendor '{}' at {}. Switching vendor and re-downloading if necessary...", desiredVendor, currentVendorFromPath, javaPath);
             javaPath = null; // trigger auto-setup to fetch the desired vendor distribution
@@ -249,17 +245,17 @@ public class CleanroomRelauncher {
                                 desiredVendor,
                                 new JavaDownloader.ProgressListener() {
                                     private long total = -1;
-                                    private long startNs = -1;
-                                    private int lastPct = 0;
+                                    private final CalculationUtilities.DownloadSpeedCalculator speedCalc = new CalculationUtilities.DownloadSpeedCalculator();
+                                    
                                     @Override
                                     public void onStart(long totalBytes) {
                                         this.total = totalBytes;
-                                        this.startNs = System.nanoTime();
+                                        speedCalc.reset();
                                         SetupProgressDialog dlg = setupDialogRef.get();
                                         if (dlg != null) {
                                             if (totalBytes > 0) {
                                                 dlg.setIndeterminate(false);
-                                                dlg.setProgress(0, "0%  0 B/s  ETA --:--");
+                                                dlg.setProgress(0, "0 B/s  ETA --:--");
                                             } else {
                                                 dlg.setIndeterminate(true);
                                             }
@@ -269,16 +265,19 @@ public class CleanroomRelauncher {
                                     public void onProgress(long downloadedBytes, long totalBytes) {
                                         if (total > 0) {
                                             int pct = (int) ((downloadedBytes * 100L) / total);
-                                            lastPct = pct;
                                             SetupProgressDialog dlg = setupDialogRef.get();
                                             if (dlg != null) {
-                                                long elapsedNs = System.nanoTime() - startNs;
-                                                double elapsedSec = elapsedNs > 0 ? (elapsedNs / 1_000_000_000.0) : 0.0;
-                                                double bps = elapsedSec > 0 ? (downloadedBytes / elapsedSec) : 0.0;
-                                                long remaining = Math.max(0L, total - downloadedBytes);
-                                                long etaSec = bps > 0 ? (long) Math.ceil(remaining / bps) : -1;
-                                                String text = String.format(Locale.ROOT, "%d%%  %s  ETA %s", pct, formatSpeed(bps), formatETA(etaSec));
-                                                dlg.setProgress(pct, text);
+                                                double speed = speedCalc.calculateSpeed(downloadedBytes);
+                                                long eta = speedCalc.calculateSmoothedETA(total, downloadedBytes, speed);
+                                                dlg.setIndeterminate(false);
+                                                dlg.setProgressPercent(pct);
+                                                dlg.setMessage(String.format(
+                                                        "Downloading Java %d (%s) - %s - ETA: %s",
+                                                        desiredJava,
+                                                        desiredVendor,
+                                                        CalculationUtilities.formatSpeed(speed),
+                                                        CalculationUtilities.formatETA(eta)
+                                                ));
                                             }
                                         }
                                     }
@@ -287,8 +286,8 @@ public class CleanroomRelauncher {
                                         SetupProgressDialog dlg = setupDialogRef.get();
                                         if (dlg != null) {
                                             int secs = (int) Math.ceil(delayMs / 1000.0);
-                                            String text = String.format(Locale.ROOT, "%d%%  Retry %d/%d in %ds", lastPct, attempt, maxAttempts, secs);
-                                            dlg.setProgress(lastPct, text);
+                                            String text = String.format(Locale.ROOT, "Retry %d/%d in %ds", attempt, maxAttempts, secs);
+                                            dlg.setProgress(0, text);
                                         }
                                     }
                                 }
@@ -299,18 +298,17 @@ public class CleanroomRelauncher {
                                 desiredJava,
                                 desiredVendor,
                                 new JavaDownloader.ProgressListener() {
+                                    private CalculationUtilities.DownloadSpeedCalculator speedCalculator = new CalculationUtilities.DownloadSpeedCalculator();
                                     private long total = -1;
-                                    private long startNs = -1;
-                                    private int lastPct = 0;
                                     @Override
                                     public void onStart(long totalBytes) {
                                         this.total = totalBytes;
-                                        this.startNs = System.nanoTime();
+                                        speedCalculator.reset();
                                         SetupProgressDialog dlg = setupDialogRef.get();
                                         if (dlg != null) {
                                             if (totalBytes > 0) {
                                                 dlg.setIndeterminate(false);
-                                                dlg.setProgress(0, "0%  0 B/s  ETA --:--");
+                                                dlg.setProgress(0, "0 B/s  ETA --:--");
                                             } else {
                                                 dlg.setIndeterminate(true);
                                             }
@@ -320,16 +318,19 @@ public class CleanroomRelauncher {
                                     public void onProgress(long downloadedBytes, long totalBytes) {
                                         if (total > 0) {
                                             int pct = (int) ((downloadedBytes * 100L) / total);
-                                            lastPct = pct;
                                             SetupProgressDialog dlg = setupDialogRef.get();
                                             if (dlg != null) {
-                                                long elapsedNs = System.nanoTime() - startNs;
-                                                double elapsedSec = elapsedNs > 0 ? (elapsedNs / 1_000_000_000.0) : 0.0;
-                                                double bps = elapsedSec > 0 ? (downloadedBytes / elapsedSec) : 0.0;
-                                                long remaining = Math.max(0L, total - downloadedBytes);
-                                                long etaSec = bps > 0 ? (long) Math.ceil(remaining / bps) : -1;
-                                                String text = String.format(Locale.ROOT, "%d%%  %s  ETA %s", pct, formatSpeed(bps), formatETA(etaSec));
-                                                dlg.setProgress(pct, text);
+                                                double speed = speedCalculator.calculateSpeed(downloadedBytes);
+                                                long eta = speedCalculator.calculateSmoothedETA(total, downloadedBytes, speed);
+                                                dlg.setIndeterminate(false);
+                                                dlg.setProgressPercent(pct);
+                                                dlg.setMessage(String.format(
+                                                        "Downloading Java %d (%s) - %s - ETA: %s",
+                                                        desiredJava,
+                                                        desiredVendor,
+                                                        CalculationUtilities.formatSpeed(speed),
+                                                        CalculationUtilities.formatETA(eta)
+                                                ));
                                             }
                                         }
                                     }
@@ -338,8 +339,8 @@ public class CleanroomRelauncher {
                                         SetupProgressDialog dlg = setupDialogRef.get();
                                         if (dlg != null) {
                                             int secs = (int) Math.ceil(delayMs / 1000.0);
-                                            String text = String.format(Locale.ROOT, "%d%%  Retry %d/%d in %ds", lastPct, attempt, maxAttempts, secs);
-                                            dlg.setProgress(lastPct, text);
+                                            String text = String.format(Locale.ROOT, "Retry %d/%d in %ds", attempt, maxAttempts, secs);
+                                            dlg.setProgress(0, text);
                                         }
                                     }
                                 }
@@ -350,18 +351,17 @@ public class CleanroomRelauncher {
                                 desiredJava,
                                 desiredVendor,
                                 new JavaDownloader.ProgressListener() {
+                                    private CalculationUtilities.DownloadSpeedCalculator speedCalculator = new CalculationUtilities.DownloadSpeedCalculator();
                                     private long total = -1;
-                                    private long startNs = -1;
-                                    private int lastPct = 0;
                                     @Override
                                     public void onStart(long totalBytes) {
-                                        this.total = totalBytes;
-                                        this.startNs = System.nanoTime();
+                                        total = totalBytes;
+                                        speedCalculator.reset();
                                         SetupProgressDialog dlg = setupDialogRef.get();
                                         if (dlg != null) {
                                             if (totalBytes > 0) {
                                                 dlg.setIndeterminate(false);
-                                                dlg.setProgress(0, "0%  0 B/s  ETA --:--");
+                                                dlg.setProgress(0, "0 B/s  ETA --:--");
                                             } else {
                                                 dlg.setIndeterminate(true);
                                             }
@@ -371,16 +371,19 @@ public class CleanroomRelauncher {
                                     public void onProgress(long downloadedBytes, long totalBytes) {
                                         if (total > 0) {
                                             int pct = (int) ((downloadedBytes * 100L) / total);
-                                            lastPct = pct;
                                             SetupProgressDialog dlg = setupDialogRef.get();
                                             if (dlg != null) {
-                                                long elapsedNs = System.nanoTime() - startNs;
-                                                double elapsedSec = elapsedNs > 0 ? (elapsedNs / 1_000_000_000.0) : 0.0;
-                                                double bps = elapsedSec > 0 ? (downloadedBytes / elapsedSec) : 0.0;
-                                                long remaining = Math.max(0L, total - downloadedBytes);
-                                                long etaSec = bps > 0 ? (long) Math.ceil(remaining / bps) : -1;
-                                                String text = String.format(Locale.ROOT, "%d%%  %s  ETA %s", pct, formatSpeed(bps), formatETA(etaSec));
-                                                dlg.setProgress(pct, text);
+                                                double speed = speedCalculator.calculateSpeed(downloadedBytes);
+                                                long eta = speedCalculator.calculateSmoothedETA(total, downloadedBytes, speed);
+                                                dlg.setIndeterminate(false);
+                                                dlg.setProgressPercent(pct);
+                                                dlg.setMessage(String.format(
+                                                        "Downloading Java %d (%s) - %s - ETA: %s",
+                                                        desiredJava,
+                                                        desiredVendor,
+                                                        CalculationUtilities.formatSpeed(speed),
+                                                        CalculationUtilities.formatETA(eta)
+                                                ));
                                             }
                                         }
                                     }
@@ -389,8 +392,8 @@ public class CleanroomRelauncher {
                                         SetupProgressDialog dlg = setupDialogRef.get();
                                         if (dlg != null) {
                                             int secs = (int) Math.ceil(delayMs / 1000.0);
-                                            String text = String.format(Locale.ROOT, "%d%%  Retry %d/%d in %ds", lastPct, attempt, maxAttempts, secs);
-                                            dlg.setProgress(lastPct, text);
+                                            String text = String.format(Locale.ROOT, "Retry %d/%d in %ds", attempt, maxAttempts, secs);
+                                            dlg.setProgress(0, text);
                                         }
                                     }
                                 }
@@ -420,7 +423,7 @@ public class CleanroomRelauncher {
         }
 
         // Show GUI only if still missing required selections, or if no auto-setup occurred and a newer latest is available
-        boolean shouldShowGui = (selected == null || javaPath == null) || (!didAutoSetup && needsNotifyLatest);
+        boolean shouldShowGui = (selected == null || javaPath == null) || (!didAutoSetup && needsNotifyLatest && !autoUpdate);
         if (shouldShowGui) {
             {
                 SetupProgressDialog dlg = setupDialogRef.getAndSet(null); // safety: ensure dialog is not left open when showing GUI
@@ -433,57 +436,84 @@ public class CleanroomRelauncher {
                 $.selected = fSelected;
                 $.javaPath = fJavaPath;
                 $.javaArgs = fJavaArgs;
+                $.autoUpdate = CleanroomRelauncher.CONFIG.isAutoUpdate();
             });
 
             selected = gui.selected;
             javaPath = gui.javaPath;
             javaArgs = gui.javaArgs;
+            if (gui.autoUpdate) {
+                selected = latestRelease;
+            }
 
             CONFIG.setCleanroomVersion(selected.name);
             CONFIG.setLatestCleanroomVersion(latestRelease.name);
             CONFIG.setJavaExecutablePath(javaPath);
             CONFIG.setJavaArguments(javaArgs);
+            CONFIG.setAutoUpdate(gui.autoUpdate);
 
+            CONFIG.save();
+        }
+
+        if (!didAutoSetup && !shouldShowGui && selected != null) {
+            CONFIG.setCleanroomVersion(selected.name);
+            CONFIG.setLatestCleanroomVersion(latestRelease.name);
+            if (javaPath != null) CONFIG.setJavaExecutablePath(javaPath);
+            CONFIG.setJavaArguments(javaArgs);
             CONFIG.save();
         }
 
         CleanroomCache releaseCache = CleanroomCache.of(selected);
 
         LOGGER.info("Preparing Cleanroom v{} and its libraries...", selected.name);
-        if (didAutoSetup) {
-            if (setupDialogRef.get() == null) {
-                setupDialogRef.set(SetupProgressDialog.show("Setting Up Necessary Libraries (Only Happens Once)"));
-            }
-            {
-                SetupProgressDialog dlg = setupDialogRef.get();
-                if (dlg != null) {
-                    dlg.setMessage("Downloading Cleanroom libraries...");
-                    dlg.setIndeterminate(false);
-                    dlg.setProgressPercent(0);
-                }
-            }
-            GlobalDownloader.INSTANCE.setProgressListener(new GlobalDownloader.TaskProgressListener() {
-                private int total = 0;
-                @Override
-                public void onTotal(int total) {
-                    this.total = Math.max(1, total);
-                    SetupProgressDialog dlg = setupDialogRef.get();
-                    if (dlg != null) dlg.setProgressPercent(0);
-                }
-                @Override
-                public void onCompleted(int completed, int total) {
-                    int pct = (int) ((completed * 100.0f) / Math.max(1, total));
-                    SetupProgressDialog dlg = setupDialogRef.get();
-                    if (dlg != null) dlg.setProgressPercent(pct);
-                }
-            });
+        SetupProgressDialog dlg = setupDialogRef.get();
+        if (dlg == null) {
+            dlg = SetupProgressDialog.show("Setting Up Necessary Libraries (Only Happens Once)");
+            setupDialogRef.set(dlg);
         }
+        dlg.setMessage("Downloading Cleanroom libraries...");
+        dlg.setIndeterminate(false);
+        dlg.setProgressPercent(0);
+        final SetupProgressDialog finalDlg = dlg;
+        GlobalDownloader.INSTANCE.setProgressListener(new GlobalDownloader.TaskProgressListener() {
+            private int totalFiles = 0;
+            private long totalBytes = 0;
+            
+            @Override
+            public void onTotal(int totalFiles, long totalBytes) {
+                this.totalFiles = Math.max(1, totalFiles);
+                this.totalBytes = totalBytes;
+                finalDlg.setProgressPercent(0);
+            }
+            
+            @Override
+            public void onProgress(int completedFiles, int totalFiles, long downloadedBytes, long totalBytes, double speed, long eta) {
+                int pct = totalBytes > 0 
+                    ? (int) ((downloadedBytes * 100L) / totalBytes)
+                    : (int) ((completedFiles * 100.0f) / Math.max(1, totalFiles));
+                finalDlg.setProgressPercent(pct);
+                
+                if (totalBytes > 0 && speed > 0) {
+                    finalDlg.setMessage(String.format(
+                        "Downloading libraries - %d/%d files - %s - ETA: %s",
+                        completedFiles,
+                        totalFiles,
+                        CalculationUtilities.formatSpeed(speed),
+                        CalculationUtilities.formatETA(eta)
+                    ));
+                } else {
+                    finalDlg.setMessage(String.format(
+                        "Downloading libraries - %d/%d files",
+                        completedFiles,
+                        totalFiles
+                    ));
+                }
+            }
+        });
         List<Version> versions = versions(releaseCache);
-        if (didAutoSetup) {
-            SetupProgressDialog dlg = setupDialogRef.getAndSet(null);
-            if (dlg != null) dlg.close();
-            GlobalDownloader.INSTANCE.setProgressListener(null);
-        }
+        GlobalDownloader.INSTANCE.setProgressListener(null);
+        SetupProgressDialog closeDlg = setupDialogRef.getAndSet(null);
+        if (closeDlg != null) closeDlg.close();
 
         String wrapperClassPath = getOrExtract();
 

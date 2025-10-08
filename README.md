@@ -9,29 +9,42 @@ Makes the Cleanroom Relauncher a much more seamless experience for modpack users
 Relaunches a Forge 1.12.2 instance with Cleanroom Loader, with a streamlined first-run experience and automatic Java setup.
 
 Features
-- Automatic Java download and setup
-    - Configurable major version (default: 21)
-    - Configurable distribution (default: Adoptium)
-- Cross-platform and arch-aware
+- **High-Performance Parallel Downloads**
+    - Multi-chunk Java downloads (up to 8 concurrent chunks with resume support)
+    - Multi-file library downloads (up to 8 files simultaneously)
+    - Real-time download speed and ETA tracking
+    - Automatic retry with exponential backoff
+    - Intelligent chunk-level resume after interruption
+    - File integrity verification
+- **Automatic Java download and setup**
+    - Configurable major version (default: 24, minimum: 21)
+    - Configurable distribution (default: Adoptium, alternative: GraalVM)
+    - Automatic stale partial file cleanup
+- **Cross-platform and arch-aware**
     - Windows: x64, ARM64
     - Linux: x64, aarch64
     - macOS: Intel (x64), Apple Silicon (aarch64)
-- First-run automation
+- **First-run automation**
     - Auto-selects the latest Cleanroom Loader release
-    - Progress popup: "Setting Up Necessary Libraries (Only Happens Once)" with download progress
-- Auto-switch Java when config javaVersion changes
-- Automatic download resuming and retrying
+    - Progress popup with detailed download statistics (speed, ETA, file count)
+    - Auto-switch Java when config javaVersion changes
+    - Auto-update to the latest Cleanroom release on launch (configurable)
+    - Thread-safe concurrent downloads with file deduplication
 
 First run setup
-- If no Java path is configured, the relauncher downloads Java for your OS/architecture and config javaVersion.
-- A progress dialog shows the download status and then the archive is extracted automatically.
+- If no Java path is configured, the relauncher downloads Java for your OS/architecture and config javaVersion using parallel chunk downloads.
+- A progress dialog shows detailed download statistics: speed (MB/s), ETA, percentage, and file count.
+- Downloads automatically resume if interrupted - no need to start over!
 - The latest Cleanroom Loader release is selected automatically (no manual selection needed).
+- All libraries are downloaded in parallel (up to 8 simultaneous downloads) for faster setup.
 
 Configuration
 - File: config/relauncher.json
 - Key options:
-    - javaVersion: desired major version (e.g., 21, 24). Changing this triggers an automatic re-download and switch.
+    - javaVersion: desired major version (e.g., 24). Default is 24, minimum is 21. Changing this triggers an automatic re-download and switch.
+    - javaVendor: preferred distribution - "adoptium" (Temurin) or "graalvm" (GraalVM Community). Default: "adoptium".
     - javaExecutablePath: set if you want to force a specific Java. If it’s not valid or mismatched with javaVersion, the relauncher will auto-download the correct one.
+    - autoUpdate: when true, always selects the latest Cleanroom release on launch and updates the selected version automatically. Default: false.
 
 Cache locations
 - Java is cached under: &lt;UserHome&gt;/.cleanroom/relauncher/java/&lt;distribution&gt;-&lt;version&gt;-&lt;os&gt;-&lt;arch&gt;

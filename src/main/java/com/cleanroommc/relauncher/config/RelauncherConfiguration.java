@@ -1,6 +1,7 @@
 package com.cleanroommc.relauncher.config;
 
 import com.cleanroommc.relauncher.CleanroomRelauncher;
+import com.cleanroommc.relauncher.download.java.JavaDownloader;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.annotations.SerializedName;
@@ -38,11 +39,13 @@ public class RelauncherConfiguration {
     @SerializedName("args")
     private String javaArguments = "";
     @SerializedName("javaVersion")
-    private int javaVersion = 21;
+    private int javaVersion = JavaDownloader.DEFAULT_JAVA_VERSION;
     @SerializedName("javaVendor")
     private String javaVendor = "adoptium";
     @SerializedName("darkMode")
     private boolean darkMode = true;
+    @SerializedName("autoUpdate")
+    private boolean autoUpdate = false;
 
     public String getCleanroomVersion() {
         return cleanroomVersion;
@@ -61,7 +64,7 @@ public class RelauncherConfiguration {
     }
 
     public int getJavaVersion() {
-        return javaVersion <= 0 ? 21 : javaVersion;
+        return javaVersion <= 0 ? JavaDownloader.DEFAULT_JAVA_VERSION : javaVersion;
     }
 
     public String getJavaVendor() {
@@ -70,6 +73,10 @@ public class RelauncherConfiguration {
 
     public boolean isDarkMode() {
         return darkMode;
+    }
+
+    public boolean isAutoUpdate() {
+        return autoUpdate;
     }
 
     public void setCleanroomVersion(String cleanroomVersion) {
@@ -100,6 +107,10 @@ public class RelauncherConfiguration {
         this.darkMode = darkMode;
     }
 
+    public void setAutoUpdate(boolean autoUpdate) {
+        this.autoUpdate = autoUpdate;
+    }
+
     public void save() {
         FILE.getParentFile().mkdirs();
         try (Writer writer = new OutputStreamWriter(new FileOutputStream(FILE), StandardCharsets.UTF_8)) {
@@ -125,12 +136,17 @@ public class RelauncherConfiguration {
             writer.write("  \"javaVendor\": \"" + escapeJson(getJavaVendor()) + "\"," + nl);
 
             // javaVersion
-            writer.write("  // Java major version to use (e.g., 21). Changing this triggers auto re-download and switch." + nl);
+            writer.write("  // Java major version to use (e.g., " + JavaDownloader.DEFAULT_JAVA_VERSION + "). Changing this triggers auto re-download and switch." + nl);
             writer.write("  \"javaVersion\": " + getJavaVersion() + "," + nl);
 
             // darkMode
             writer.write("  // UI theme: dark mode on/off (default: true). When enabled, all relauncher UI uses a dark theme." + nl);
             writer.write("  \"darkMode\": " + (isDarkMode() ? "true" : "false") + "," + nl);
+
+            // autoUpdate
+            writer.write("  // Automatically switch to the latest Cleanroom release on launch." + nl);
+            writer.write("  // When true, the relauncher will always select the latest release, skipping update prompts." + nl);
+            writer.write("  \"autoUpdate\": " + (isAutoUpdate() ? "true" : "false") + "," + nl);
 
             // javaPath
             writer.write("  // Optional absolute path to a Java executable. Leave null/empty to let the relauncher manage Java automatically." + nl);

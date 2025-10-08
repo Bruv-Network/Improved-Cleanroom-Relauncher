@@ -6,6 +6,7 @@ import com.cleanroommc.javautils.spi.JavaLocator;
 import com.cleanroommc.platformutils.Platform;
 import com.cleanroommc.relauncher.CleanroomRelauncher;
 import com.cleanroommc.relauncher.download.CleanroomRelease;
+import com.cleanroommc.relauncher.download.java.JavaDownloader;
 import net.minecraftforge.fml.cleanroomrelauncher.ExitVMBypass;
 
 import javax.swing.*;
@@ -146,6 +147,7 @@ public class RelauncherGUI extends JDialog {
 
     public CleanroomRelease selected;
     public String javaPath, javaArgs;
+    public boolean autoUpdate;
 
     private JFrame frame;
 
@@ -330,6 +332,13 @@ public class RelauncherGUI extends JDialog {
         releaseBox.addActionListener(e -> selected = (CleanroomRelease) releaseBox.getSelectedItem());
         dropdown.add(releaseBox, BorderLayout.CENTER);
 
+        // Auto-update toggle
+        select.add(Box.createRigidArea(new Dimension(0, 10)));
+        JCheckBox autoUpdateBox = new JCheckBox("Auto-update to latest Cleanroom on launch");
+        autoUpdateBox.setSelected(autoUpdate);
+        autoUpdateBox.addActionListener(e -> autoUpdate = autoUpdateBox.isSelected());
+        select.add(autoUpdateBox);
+
         return cleanroomPicker;
     }
 
@@ -473,7 +482,7 @@ public class RelauncherGUI extends JDialog {
                     this.javaInstalls = JavaLocator.locators().parallelStream()
                             .map(JavaLocator::all)
                             .flatMap(Collection::stream)
-                            .filter(javaInstall -> javaInstall.version().major() >= 21)
+                            .filter(javaInstall -> javaInstall.version().major() >= JavaDownloader.MINIMUM_JAVA_VERSION)
                             .distinct()
                             .sorted()
                             .collect(Collectors.toList());
@@ -484,7 +493,7 @@ public class RelauncherGUI extends JDialog {
                 protected void done() {
                     timer.stop();
                     autoDetect.setText(original);
-                    JOptionPane.showMessageDialog(RelauncherGUI.this, javaInstalls.size() + " Java 21+ Installs Found!", "Auto-Detection Finished", JOptionPane.INFORMATION_MESSAGE);
+                    JOptionPane.showMessageDialog(RelauncherGUI.this, javaInstalls.size() + " Java " + JavaDownloader.MINIMUM_JAVA_VERSION + "+ Installs Found!", "Auto-Detection Finished", JOptionPane.INFORMATION_MESSAGE);
                     autoDetect.setEnabled(true);
 
                     if (!javaInstalls.isEmpty()) {
@@ -582,9 +591,9 @@ public class RelauncherGUI extends JDialog {
     private Runnable testJavaAndReturn() {
         try {
             JavaInstall javaInstall = JavaUtils.parseInstall(javaPath);
-            if (javaInstall.version().major() < 21) {
-                CleanroomRelauncher.LOGGER.fatal("Java 21+ needed, user specified Java {} instead", javaInstall.version());
-                return () -> JOptionPane.showMessageDialog(this, "Java 21 is the minimum version for Cleanroom. Currently, Java " + javaInstall.version().major() + " is selected.", "Old Java Version", JOptionPane.ERROR_MESSAGE);
+            if (javaInstall.version().major() < JavaDownloader.MINIMUM_JAVA_VERSION) {
+                CleanroomRelauncher.LOGGER.fatal("Java {}+ needed, user specified Java {} instead", JavaDownloader.MINIMUM_JAVA_VERSION, javaInstall.version());
+                return () -> JOptionPane.showMessageDialog(this, "Java " + JavaDownloader.MINIMUM_JAVA_VERSION + " is the minimum version for Cleanroom. Currently, Java " + javaInstall.version().major() + " is selected.", "Old Java Version", JOptionPane.ERROR_MESSAGE);
             }
             CleanroomRelauncher.LOGGER.info("Java {} specified from {}", javaInstall.version().major(), javaPath);
         } catch (IOException e) {
@@ -597,9 +606,9 @@ public class RelauncherGUI extends JDialog {
     private void testJava() {
         try {
             JavaInstall javaInstall = JavaUtils.parseInstall(javaPath);
-            if (javaInstall.version().major() < 21) {
-                CleanroomRelauncher.LOGGER.fatal("Java 21+ needed, user specified Java {} instead", javaInstall.version());
-                JOptionPane.showMessageDialog(this, "Java 21 is the minimum version for Cleanroom. Currently, Java " + javaInstall.version().major() + " is selected.", "Old Java Version", JOptionPane.ERROR_MESSAGE);
+            if (javaInstall.version().major() < JavaDownloader.MINIMUM_JAVA_VERSION) {
+                CleanroomRelauncher.LOGGER.fatal("Java {}+ needed, user specified Java {} instead", JavaDownloader.MINIMUM_JAVA_VERSION, javaInstall.version());
+                JOptionPane.showMessageDialog(this, "Java " + JavaDownloader.MINIMUM_JAVA_VERSION + " is the minimum version for Cleanroom. Currently, Java " + javaInstall.version().major() + " is selected.", "Old Java Version", JOptionPane.ERROR_MESSAGE);
                 return;
             }
             CleanroomRelauncher.LOGGER.info("Java {} specified from {}", javaInstall.version().major(), javaPath);
