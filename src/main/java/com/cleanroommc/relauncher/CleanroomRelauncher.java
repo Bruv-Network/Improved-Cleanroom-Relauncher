@@ -69,6 +69,45 @@ public class CleanroomRelauncher {
         return null;
     }
 
+    private static String extractArchFromPath(String javaPath) {
+        if (javaPath == null || javaPath.isEmpty()) return null;
+        String normalized = javaPath.replace('\\', '/');
+        try {
+            Pattern pat = Pattern.compile("(temurin|graalvm)-(\\d+)-(windows|linux|mac)-(x64|aarch64)", Pattern.CASE_INSENSITIVE);
+            Matcher m = pat.matcher(normalized);
+            if (m.find()) {
+                return m.group(4).toLowerCase(Locale.ROOT);
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    private static String detectCurrentArch() {
+        String osName = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+        
+        if (osName.contains("mac")) {
+            try {
+                Process process = Runtime.getRuntime().exec(new String[]{"uname", "-m"});
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                    String line = reader.readLine();
+                    if (line != null) {
+                        line = line.trim().toLowerCase(Locale.ROOT);
+                        if (line.equals("arm64") || line.equals("aarch64")) {
+                            return "aarch64";
+                        }
+                    }
+                }
+                process.waitFor();
+            } catch (Exception e) {
+                LOGGER.warn("Failed to detect Mac architecture via uname, falling back to os.arch: {}", e.toString());
+            }
+        }
+        
+        String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
+        return (arch.contains("aarch64") || arch.contains("arm64")) ? "aarch64" : "x64";
+    }
+
     private static String normalizeVendorName(String vendor) {
         if (vendor == null || vendor.isEmpty()) return "adoptium";
         String lower = vendor.toLowerCase(Locale.ROOT);
@@ -220,6 +259,12 @@ public class CleanroomRelauncher {
         if (javaPath != null && currentVendorFromPath != null && !currentVendorFromPath.equalsIgnoreCase(desiredVendor)) {
             LOGGER.info("Configured Java vendor '{}' differs from current vendor '{}' at {}. Switching vendor and re-downloading if necessary...", desiredVendor, currentVendorFromPath, javaPath);
             javaPath = null; // trigger auto-setup to fetch the desired vendor distribution
+        }
+        String currentArchFromPath = extractArchFromPath(javaPath);
+        String currentArch = detectCurrentArch();
+        if (javaPath != null && currentArchFromPath != null && !currentArchFromPath.equalsIgnoreCase(currentArch)) {
+            LOGGER.info("Configured Java architecture '{}' differs from current hardware architecture '{}' at {}. Switching to native architecture and re-downloading...", currentArchFromPath, currentArch, javaPath);
+            javaPath = null; // trigger auto-setup to fetch the correct architecture
         }
         boolean initialSetupNeeded = (selected == null) || (javaPath == null);
         if (initialSetupNeeded) {
