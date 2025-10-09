@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.5] - 2025-10-09
+## Hotfix 2: Electric Boogaloo
+### Fixed
+- MacOS Architecture Detection Again 
+
+(Screw Rosetta man, that thing is just too aggressive, also due to Mojang's laziness)
+
 ## [0.3.4] - 2025-10-08
 ## Hotfix
 ### Added
