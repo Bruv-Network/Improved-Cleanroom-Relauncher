@@ -83,25 +83,58 @@ public class CleanroomRelauncher {
         return null;
     }
 
-    private static String detectCurrentArch() {
+    public static String detectCurrentArch() {
         String osName = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
-        
+
+        // FUCK ROSETTA. I fucking hate Rosetta so much you have no idea.
+        // This piece of shit lies about EVERYTHING. os.arch? "x86_64". uname -m? "x86_64".
+        // THE HARDWARE IS ARM64. But Rosetta is so goddamn aggressive it makes the ENTIRE SYSTEM lie.
+        // So we download x64 Java, it runs through Rosetta (slow as shit), and everything sucks.
+        // And WHY is this even happening? Because Mojang STILL ships x64 Java 8 on Apple Silicon.
+        // It's been 5 years since M1 came out. FIVE YEARS. Get your shit together.
+        // So now I have to manually check the actual CPU branding with sysctl to work around this nightmare.
+        // I shouldn't have to do this. This is insane. Fuck Apple. Fuck Mojang.
         if (osName.contains("mac")) {
             try {
-                Process process = Runtime.getRuntime().exec(new String[]{"uname", "-m"});
-                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-                    String line = reader.readLine();
-                    if (line != null) {
-                        line = line.trim().toLowerCase(Locale.ROOT);
-                        if (line.equals("arm64") || line.equals("aarch64")) {
+                Process cpuProcess = Runtime.getRuntime().exec(new String[]{"sysctl", "-n", "machdep.cpu.brand_string"});
+                cpuProcess.waitFor();
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(cpuProcess.getInputStream()))) {
+                    String cpuBrand = reader.readLine();
+                    if (cpuBrand != null) {
+                        cpuBrand = cpuBrand.trim();
+                        LOGGER.info("macOS CPU: {}", cpuBrand);
+                        if (cpuBrand.toLowerCase(Locale.ROOT).contains("apple")) {
+                            LOGGER.info("Detected Apple Silicon (ARM64) via CPU branding");
                             return "aarch64";
                         }
                     }
                 }
-                process.waitFor();
             } catch (Exception e) {
-                LOGGER.warn("Failed to detect Mac architecture via uname, falling back to os.arch: {}", e.toString());
+                LOGGER.warn("Failed to detect CPU brand via sysctl: {}", e.toString());
             }
+            
+            try {
+                Process rosettaProcess = Runtime.getRuntime().exec(new String[]{"sysctl", "-n", "sysctl.proc_translated"});
+                rosettaProcess.waitFor();
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(rosettaProcess.getInputStream()))) {
+                    String translated = reader.readLine();
+                    if (translated != null && translated.trim().equals("1")) {
+                        LOGGER.info("Detected process running under Rosetta 2 - hardware is Apple Silicon (ARM64)");
+                        return "aarch64";
+                    }
+                }
+            } catch (Exception e) {
+                LOGGER.debug("sysctl.proc_translated check failed (normal for Intel Mac or native ARM process): {}", e.toString());
+            }
+            
+            String osArch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
+            if (osArch.contains("aarch64") || osArch.contains("arm64")) {
+                LOGGER.info("Detected native ARM64 JVM via os.arch: {}", osArch);
+                return "aarch64";
+            }
+            
+            LOGGER.info("Detected Intel Mac (x64)");
+            return "x64";
         }
         
         String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
@@ -217,6 +250,12 @@ public class CleanroomRelauncher {
             LOGGER.info("Cleanroom detected. No need to relaunch!");
             return;
         }
+
+        String osName = System.getProperty("os.name");
+        String osArch = System.getProperty("os.arch");
+        String detectedArch = detectCurrentArch();
+        LOGGER.info("Detected OS: {} ({})", osName, osArch);
+        LOGGER.info("Hardware Architecture: {}", detectedArch);
 
         replaceCerts();
 

@@ -59,28 +59,7 @@ public final class JavaDownloader {
     }
 
     private static String detectArch() {
-        String osName = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
-        
-        if (osName.contains("mac")) {
-            try {
-                Process process = Runtime.getRuntime().exec(new String[]{"uname", "-m"});
-                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-                    String line = reader.readLine();
-                    if (line != null) {
-                        line = line.trim().toLowerCase(Locale.ROOT);
-                        if (line.equals("arm64") || line.equals("aarch64")) {
-                            return "aarch64";
-                        }
-                    }
-                }
-                process.waitFor();
-            } catch (Exception e) {
-                CleanroomRelauncher.LOGGER.warn("Failed to detect Mac architecture via uname, falling back to os.arch: {}", e.toString());
-            }
-        }
-        
-        String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
-        return (arch.contains("aarch64") || arch.contains("arm64")) ? "aarch64" : "x64";
+        return CleanroomRelauncher.detectCurrentArch();
     }
 
     public static String ensureWindowsJava(Path baseDir, int majorVersion, String vendor, ProgressListener progressListener) throws IOException {
@@ -98,15 +77,18 @@ public final class JavaDownloader {
     private static String ensureJava(Path baseDir, int majorVersion, String vendor, ProgressListener progressListener, String os, String archiveExt) throws IOException {
         if (majorVersion <= 0) majorVersion = DEFAULT_JAVA_VERSION;
         String arch = detectArch();
+        CleanroomRelauncher.LOGGER.info("Using architecture '{}' for Java download (OS: {})", arch, os);
         
         Path temDir = baseDir.resolve(String.format("temurin-%d-%s-%s", majorVersion, os, arch));
         Path graDir = baseDir.resolve(String.format("graalvm-%d-%s-%s", majorVersion, os, arch));
         boolean wantGraal = vendor != null && vendor.equalsIgnoreCase("graalvm");
         Path javaBin = wantGraal ? findJavaBinary(graDir) : findJavaBinary(temDir);
         if (javaBin != null && Files.isRegularFile(javaBin)) {
+            CleanroomRelauncher.LOGGER.info("Found existing Java installation at: {}", javaBin.toAbsolutePath());
             return javaBin.toAbsolutePath().toString();
         }
 
+        CleanroomRelauncher.LOGGER.info("Downloading Java {} {} for {}-{}", majorVersion, vendor != null ? vendor : "Adoptium", os, arch);
         DownloadInfo downloadInfo = resolveDownloadUrl(majorVersion, os, arch, vendor);
         
         String vendorSlug = downloadInfo.vendorUsed;
