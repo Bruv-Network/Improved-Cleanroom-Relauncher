@@ -86,14 +86,6 @@ public class CleanroomRelauncher {
     public static String detectCurrentArch() {
         String osName = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
 
-        // FUCK ROSETTA. I fucking hate Rosetta so much you have no idea.
-        // This piece of shit lies about EVERYTHING. os.arch? "x86_64". uname -m? "x86_64".
-        // THE HARDWARE IS ARM64. But Rosetta is so goddamn aggressive it makes the ENTIRE SYSTEM lie.
-        // So we download x64 Java, it runs through Rosetta (slow as shit), and everything sucks.
-        // And WHY is this even happening? Because Mojang STILL ships x64 Java 8 on Apple Silicon.
-        // It's been 5 years since M1 came out. FIVE YEARS. Get your shit together.
-        // So now I have to manually check the actual CPU branding with sysctl to work around this nightmare.
-        // I shouldn't have to do this. This is insane. Fuck Apple. Fuck Mojang.
         if (osName.contains("mac")) {
             try {
                 Process cpuProcess = Runtime.getRuntime().exec(new String[]{"sysctl", "-n", "machdep.cpu.brand_string"});

@@ -1,6 +1,7 @@
 package com.cleanroommc.relauncher.download.cache;
 
 import com.cleanroommc.relauncher.CleanroomRelauncher;
+import com.cleanroommc.relauncher.download.CleanroomInstaller;
 import com.cleanroommc.relauncher.download.CleanroomMultiMcPack;
 import com.cleanroommc.relauncher.download.CleanroomRelease;
 import com.cleanroommc.relauncher.download.GlobalDownloader;
@@ -38,27 +39,34 @@ public class CleanroomCache {
         Path forgeJson = this.getForgeJson();
         Path minecraftJson = this.getMinecraftJson();
 
-        // Path installerJar = this.getInstallerJar();
+        Path installerJar = this.getInstallerJar();
         Path universalJar = this.getUniversalJar();
-        // Path versionJson = this.getVersionJson();
 
         Path librariesDirectory = this.getLibrariesDirectory();
         Path nativesDirectory = this.getNativesDirectory();
 
         CleanroomMultiMcPack multiMcPack = CleanroomMultiMcPack.of(this.version, multiMcPackZip);
-        // CleanroomInstaller installer = CleanroomInstaller.of(this.version, installerJar);
+        CleanroomInstaller installer = CleanroomInstaller.of(this.version, installerJar);
 
-        multiMcPack.install(this.release.getMultiMcPackArtifact().downloadUrl);
-
-        if (!Files.exists(lwjglJson) || !Files.exists(forgeJson) || !Files.exists(minecraftJson) || !Files.exists(universalJar)) {
-            multiMcPack.extract(this);
+        if (this.release.getMultiMcPackArtifact() != null) {
+            multiMcPack.install(this.release.getMultiMcPackArtifact().downloadUrl);
         }
 
-        /*
-        if (!Files.exists(universalJar) || !Files.exists(versionJson)) {
-            installer.extract(this);
+        if (this.release.getInstallerArtifact() != null) {
+            installer.install(this.release.getInstallerArtifact().downloadUrl);
         }
-         */
+
+        if (!Files.exists(lwjglJson) || !Files.exists(forgeJson) || !Files.exists(minecraftJson)) {
+            if (this.release.getMultiMcPackArtifact() != null) {
+                multiMcPack.extract(this);
+            }
+        }
+
+        if (!Files.exists(universalJar)) {
+            if (this.release.getInstallerArtifact() != null) {
+                installer.extract(this);
+            }
+        }
 
         List<Version> versions = new ArrayList<>();
 
