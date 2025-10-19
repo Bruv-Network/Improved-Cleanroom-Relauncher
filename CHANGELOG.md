@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.6] - 2025-10-20
+### Fixed
+- NoSuchElementException Crash
+
 ## [0.3.5] - 2025-10-09
 ## Hotfix 2: Electric Boogaloo
 ### Fixed
