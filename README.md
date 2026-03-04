@@ -55,3 +55,5 @@ Cache locations
 It offers a GUI on the client for manual configuration when the autoconfiguration fails.
 
 Cleanroom Loader is a new loader developed from the roots of Forge Mod Loader for Minecraft 1.12.2 specifically. It boasts better performance, modern Java support, and offers better experiences for mod developers.
+
+Forked from: [https://github.com/CleanroomMC/CleanroomRelauncher](https://github.com/CleanroomMC/CleanroomRelauncher)
