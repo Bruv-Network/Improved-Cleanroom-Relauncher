@@ -32,17 +32,27 @@ public class CleanroomRelease {
                     return fetchReleasesFromCache(CACHE_FILE);
                 }
             } catch (Throwable t) {
-                Files.delete(CACHE_FILE);
+                try {
+                    Files.deleteIfExists(CACHE_FILE);
+                } catch (IOException ignored) {}
                 CleanroomRelauncher.LOGGER.error("Unable to read cached releases.json, attempting to connect to GitHub and rebuild.", t);
             }
         } else {
             CleanroomRelauncher.LOGGER.info("No cache found, fetching releases...");
         }
-        List<CleanroomRelease> releases = fetchReleasesFromGithub();
 
-        // After fetching releases, save them to the cache
-        saveReleasesToCache(CACHE_FILE, releases);
-        return releases;
+        try {
+            List<CleanroomRelease> releases = fetchReleasesFromGithub();
+            // After fetching releases, save them to the cache
+            saveReleasesToCache(CACHE_FILE, releases);
+            return releases;
+        } catch (IOException e) {
+            if (Files.exists(CACHE_FILE)) {
+                CleanroomRelauncher.LOGGER.error("Failed to fetch releases from GitHub, falling back to cached releases.", e);
+                return fetchReleasesFromCache(CACHE_FILE);
+            }
+            throw e;
+        }
     }
 
     private static List<CleanroomRelease> fetchReleasesFromGithub() throws IOException {
@@ -51,6 +61,7 @@ public class CleanroomRelease {
             HttpURLConnection connection = (HttpURLConnection) url.openConnection();
             connection.setRequestMethod("GET");
             connection.setRequestProperty("Accept", "application/vnd.github.v3+json");
+            connection.setRequestProperty("User-Agent", "CleanroomRelauncher");
 
             if (connection.getResponseCode() != 200) {
                 throw new IOException("Failed to fetch releases: HTTP error code " + connection.getResponseCode());
