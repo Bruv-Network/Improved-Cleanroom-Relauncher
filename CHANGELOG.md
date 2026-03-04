@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.7] - 2026-03-04
+### Added
+- `disableCacheTTL` option in config to bypass release network checks.
+- `cacheDir` option in config to specify a custom cache directory.
+
+### Fixed
+- HTTP 403 API rate limit crashes when checking releases. Added a `User-Agent` header to requests and gracefully fallback to cached releases data.
+
+### Changed
+- Backend config parser to resolve file path and locale issues on some systems.
+
+## Upstream Changes
+### Fixed
+- Stop scanning the entirety of /opt on Linux (updated JavaUtils to 1.1.5)
+
 ## [0.3.6] - 2025-10-20
 ### Fixed
 - NoSuchElementException Crash
