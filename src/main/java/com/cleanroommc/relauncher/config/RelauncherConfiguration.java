@@ -48,6 +48,8 @@ public class RelauncherConfiguration {
     private boolean autoUpdate = false;
     @SerializedName("disableCacheTTL")
     private boolean disableCacheTTL = false;
+    @SerializedName("cacheDir")
+    private String cacheDir = System.getProperty("user.home") + File.separator + ".cleanroom" + File.separator + "relauncher";
 
     public String getCleanroomVersion() {
         return cleanroomVersion;
@@ -85,6 +87,13 @@ public class RelauncherConfiguration {
         return disableCacheTTL;
     }
 
+    public String getCacheDir() {
+        if (cacheDir == null || cacheDir.trim().isEmpty()) {
+            return System.getProperty("user.home") + File.separator + ".cleanroom" + File.separator + "relauncher";
+        }
+        return cacheDir;
+    }
+
     public void setCleanroomVersion(String cleanroomVersion) {
         this.cleanroomVersion = cleanroomVersion;
     }
@@ -119,6 +128,10 @@ public class RelauncherConfiguration {
 
     public void setDisableCacheTTL(boolean disableCacheTTL) {
         this.disableCacheTTL = disableCacheTTL;
+    }
+
+    public void setCacheDir(String cacheDir) {
+        this.cacheDir = cacheDir;
     }
 
     public void save() {
@@ -161,6 +174,10 @@ public class RelauncherConfiguration {
             // disableCacheTTL
             writer.write("  // Disable the cache TTL (Time To Live). If true, the list of Cleanroom releases won't be refetched if already cached." + nl);
             writer.write("  \"disableCacheTTL\": " + (isDisableCacheTTL() ? "true" : "false") + "," + nl);
+
+            // cacheDir
+            writer.write("  // Directory where downloaded files (Java, Cleanroom, etc.) will be cached." + nl);
+            writer.write("  \"cacheDir\": " + (getCacheDir() == null ? "null" : ("\"" + escapeJson(getCacheDir()) + "\"")) + "," + nl);
 
             // javaPath
             writer.write("  // Optional absolute path to a Java executable. Leave null/empty to let the relauncher manage Java automatically." + nl);

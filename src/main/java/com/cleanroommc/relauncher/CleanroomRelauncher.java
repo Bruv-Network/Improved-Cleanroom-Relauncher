@@ -35,9 +35,9 @@ public class CleanroomRelauncher {
 
     public static final Logger LOGGER = LogManager.getLogger("CleanroomRelauncher");
     public static final Gson GSON = new Gson();
-    public static final Path CACHE_DIR = Paths.get(System.getProperty("user.home"), ".cleanroom", "relauncher");
 
     public static RelauncherConfiguration CONFIG = RelauncherConfiguration.read();
+    public static final Path CACHE_DIR = Paths.get(CONFIG.getCacheDir());
 
     public CleanroomRelauncher() { }
 
