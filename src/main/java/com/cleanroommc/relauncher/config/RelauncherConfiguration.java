@@ -46,6 +46,8 @@ public class RelauncherConfiguration {
     private boolean darkMode = true;
     @SerializedName("autoUpdate")
     private boolean autoUpdate = false;
+    @SerializedName("disableCacheTTL")
+    private boolean disableCacheTTL = false;
 
     public String getCleanroomVersion() {
         return cleanroomVersion;
@@ -79,6 +81,10 @@ public class RelauncherConfiguration {
         return autoUpdate;
     }
 
+    public boolean isDisableCacheTTL() {
+        return disableCacheTTL;
+    }
+
     public void setCleanroomVersion(String cleanroomVersion) {
         this.cleanroomVersion = cleanroomVersion;
     }
@@ -109,6 +115,10 @@ public class RelauncherConfiguration {
 
     public void setAutoUpdate(boolean autoUpdate) {
         this.autoUpdate = autoUpdate;
+    }
+
+    public void setDisableCacheTTL(boolean disableCacheTTL) {
+        this.disableCacheTTL = disableCacheTTL;
     }
 
     public void save() {
@@ -147,6 +157,10 @@ public class RelauncherConfiguration {
             writer.write("  // Automatically switch to the latest Cleanroom release on launch." + nl);
             writer.write("  // When true, the relauncher will always select the latest release, skipping update prompts." + nl);
             writer.write("  \"autoUpdate\": " + (isAutoUpdate() ? "true" : "false") + "," + nl);
+
+            // disableCacheTTL
+            writer.write("  // Disable the cache TTL (Time To Live). If true, the list of Cleanroom releases won't be refetched if already cached." + nl);
+            writer.write("  \"disableCacheTTL\": " + (isDisableCacheTTL() ? "true" : "false") + "," + nl);
 
             // javaPath
             writer.write("  // Optional absolute path to a Java executable. Leave null/empty to let the relauncher manage Java automatically." + nl);

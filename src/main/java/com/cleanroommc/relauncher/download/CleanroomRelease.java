@@ -22,13 +22,14 @@ public class CleanroomRelease {
 
     public static List<CleanroomRelease> queryAll() throws IOException {
         long ttlM = Duration.ofHours(1).toMillis(); // TODO: configurable, this is temp
+        boolean disableCacheTTL = CleanroomRelauncher.CONFIG.isDisableCacheTTL();
         if (Files.exists(CACHE_FILE)) {
             CleanroomRelauncher.LOGGER.info("Loading releases from cached json.");
             try {
                 long fileModifiedM = Files.getLastModifiedTime(CACHE_FILE).toMillis();
                 long nowM = System.currentTimeMillis();
                 long diffM = nowM - fileModifiedM;
-                if (diffM < ttlM) {
+                if (disableCacheTTL || diffM < ttlM) {
                     return fetchReleasesFromCache(CACHE_FILE);
                 }
             } catch (Throwable t) {
