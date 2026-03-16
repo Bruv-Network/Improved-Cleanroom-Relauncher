@@ -142,6 +142,19 @@ public class CleanroomRelauncher {
         return lower;
     }
 
+    private static boolean isCleanroomVersionAtLeast(String version, int minMajor, int minMinor) {
+        if (version == null || version.isEmpty()) return false;
+        try {
+            String[] parts = version.split("\\.");
+            if (parts.length < 2) return false;
+            int major = Integer.parseInt(parts[0]);
+            int minor = Integer.parseInt(parts[1]);
+            return major > minMajor || (major == minMajor && minor >= minMinor);
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
     private static boolean isCleanroom() {
         try {
             Class.forName("com.cleanroommc.boot.Main");
@@ -279,7 +292,15 @@ public class CleanroomRelauncher {
         boolean didAutoSetup = false;
         AtomicReference<SetupProgressDialog> setupDialogRef = new AtomicReference<>(null);
         // Determine desired Java version from config and auto-switch if current path differs
-        int desiredJava = CONFIG.getJavaVersion();
+        int configuredJava = CONFIG.getJavaVersion();
+        // Auto-upgrade Java version to 25 for Cleanroom 0.5+
+        if (selectedVersion != null && isCleanroomVersionAtLeast(selectedVersion, 0, 5) && configuredJava < 25) {
+            LOGGER.info("Cleanroom version {} requires Java 25+. Upgrading configured Java version from {} to 25.", selectedVersion, configuredJava);
+            configuredJava = 25;
+            CONFIG.setJavaVersion(configuredJava);
+            CONFIG.save();
+        }
+        final int desiredJava = configuredJava;
         String desiredVendor = normalizeVendorName(CONFIG.getJavaVendor());
         Integer currentJavaFromPath = extractTemurinMajorFromPath(javaPath);
         if (javaPath != null && (currentJavaFromPath == null || currentJavaFromPath.intValue() != desiredJava)) {

@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.8] - 2026-03-17
+### Changed
+- Default Java version to 25 due to newer versions of Cleanroom requiring it
+- Automatically upgrade configured Java version to 25 when Cleanroom version is 0.5 or newer
+
 ## [0.3.7] - 2026-03-04
 ### Added
 - `disableCacheTTL` option in config to bypass release network checks.
